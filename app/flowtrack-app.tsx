@@ -5,6 +5,7 @@ import {
   lazy,
   ReactNode,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -43,6 +44,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  CloudOff,
   Code2,
   Database,
   Download,
@@ -55,6 +57,8 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  Maximize2,
+  Minimize2,
   Pause,
   Pin,
   Play,
@@ -76,6 +80,7 @@ import {
   X,
 } from "lucide-react";
 import { dashboardGreeting } from "./dashboard-greeting";
+import type { RichTextStats } from "./rich-text-editor";
 
 const RichTextEditor = lazy(() => import("./rich-text-editor"));
 
@@ -170,6 +175,22 @@ type Note = {
   pinned: boolean;
   tags: string[];
   createdAt: string;
+  updatedAt: string;
+};
+
+type NoteDraftFields = {
+  title: string;
+  content: string;
+  color: string;
+  pinned: boolean;
+  tags: string;
+};
+
+type NoteSaveState = "dirty" | "saving" | "saved" | "error";
+
+type StoredNoteDraft = NoteDraftFields & {
+  version: 1;
+  noteId: number | null;
   updatedAt: string;
 };
 
@@ -468,6 +489,131 @@ function notePlainText(content: string) {
     .replaceAll("&#039;", "'")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function canonicalNoteContent(content: string) {
+  return notePlainText(content) ? content : "";
+}
+
+function noteDraftFieldsFrom(note?: Note): NoteDraftFields {
+  return {
+    title: note?.title ?? "",
+    content: note?.content ?? "",
+    color: note?.color ?? "#fef3c7",
+    pinned: note?.pinned ?? false,
+    tags: note?.tags.join(", ") ?? "",
+  };
+}
+
+function noteDraftFingerprint(fields: NoteDraftFields) {
+  return JSON.stringify({
+    title: fields.title,
+    content: canonicalNoteContent(fields.content),
+    color: fields.color,
+    pinned: fields.pinned,
+    tags: fields.tags,
+  });
+}
+
+function hasMeaningfulNoteContent(fields: NoteDraftFields) {
+  return Boolean(
+    fields.title.trim() ||
+      notePlainText(fields.content) ||
+      fields.tags.trim(),
+  );
+}
+
+function noteDraftStorageKey(ownerKey: string, noteId: number | null) {
+  return `flowtrack:note-draft:v1:${encodeURIComponent(ownerKey)}:${noteId ?? "new"}`;
+}
+
+function readStoredNoteDraft(
+  ownerKey: string,
+  noteId: number | null,
+): StoredNoteDraft | null {
+  try {
+    const raw = window.localStorage.getItem(
+      noteDraftStorageKey(ownerKey, noteId),
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredNoteDraft>;
+    if (
+      parsed.version !== 1 ||
+      parsed.noteId !== noteId ||
+      typeof parsed.title !== "string" ||
+      typeof parsed.content !== "string" ||
+      typeof parsed.color !== "string" ||
+      typeof parsed.pinned !== "boolean" ||
+      typeof parsed.tags !== "string" ||
+      typeof parsed.updatedAt !== "string"
+    ) {
+      return null;
+    }
+    return parsed as StoredNoteDraft;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredNoteDraft(
+  ownerKey: string,
+  noteId: number | null,
+  fields: NoteDraftFields,
+) {
+  try {
+    const draft: StoredNoteDraft = {
+      version: 1,
+      noteId,
+      updatedAt: new Date().toISOString(),
+      ...fields,
+    };
+    window.localStorage.setItem(
+      noteDraftStorageKey(ownerKey, noteId),
+      JSON.stringify(draft),
+    );
+  } catch {
+    // Server autosave remains available if browser storage is unavailable.
+  }
+}
+
+function clearStoredNoteDraft(ownerKey: string, noteId: number | null) {
+  try {
+    window.localStorage.removeItem(noteDraftStorageKey(ownerKey, noteId));
+  } catch {
+    // Browser privacy settings may disable local storage.
+  }
+}
+
+function pluralizeRussian(
+  value: number,
+  one: string,
+  few: string,
+  many: string,
+) {
+  const modulo100 = value % 100;
+  const modulo10 = value % 10;
+  if (modulo100 >= 11 && modulo100 <= 14) return many;
+  if (modulo10 === 1) return one;
+  if (modulo10 >= 2 && modulo10 <= 4) return few;
+  return many;
+}
+
+function noteStatsLabel(stats: RichTextStats) {
+  const words = `${stats.words} ${pluralizeRussian(
+    stats.words,
+    "слово",
+    "слова",
+    "слов",
+  )}`;
+  const characters = `${stats.characters} ${pluralizeRussian(
+    stats.characters,
+    "символ",
+    "символа",
+    "символов",
+  )}`;
+  return stats.words
+    ? `${words} · ${characters} · ~${stats.readingMinutes} мин чтения`
+    : `${words} · ${characters}`;
 }
 
 type FlowTrackBackup = {
@@ -849,6 +995,56 @@ export default function FlowTrackPage({
     }
   }
 
+  const saveNote = useCallback(
+    async (noteId: number | null, fields: NoteDraftFields) => {
+      const response = await fetchDataRequest("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: noteId ? "updateNote" : "createNote",
+          payload: {
+            id: noteId ?? undefined,
+            ...fields,
+          },
+        }),
+      });
+      if (redirectIfUnauthorized(response)) {
+        throw new Error("Сессия завершена. Войдите снова, чтобы сохранить заметку.");
+      }
+      const result = (await response.json()) as {
+        error?: string;
+        note?: Note;
+      };
+      if (!response.ok || !result.note) {
+        throw new Error(result.error || "Не удалось сохранить заметку");
+      }
+
+      const savedNote = result.note;
+      setData((current) => {
+        const existingIndex = current.notes.findIndex(
+          (item) => item.id === savedNote.id,
+        );
+        if (existingIndex >= 0) {
+          const nextNotes = [...current.notes];
+          nextNotes[existingIndex] = savedNote;
+          return { ...current, notes: nextNotes };
+        }
+        const firstUnpinned = current.notes.findIndex((item) => !item.pinned);
+        const insertionIndex = savedNote.pinned
+          ? 0
+          : firstUnpinned < 0
+            ? current.notes.length
+            : firstUnpinned;
+        const nextNotes = [...current.notes];
+        nextNotes.splice(insertionIndex, 0, savedNote);
+        return { ...current, notes: nextNotes };
+      });
+      setError(null);
+      return savedNote;
+    },
+    [],
+  );
+
   function navigate(next: View) {
     setView(next);
     setMobileOpen(false);
@@ -1121,7 +1317,17 @@ export default function FlowTrackPage({
         )}
       </main>
 
-      {editor && (
+      {editor?.kind === "note" && (
+        <NoteEditorModal
+          key={`note-${editor.item?.id ?? "new"}`}
+          note={editor.item as Note | undefined}
+          ownerKey={String(data.viewer?.id ?? currentUser.email)}
+          onClose={() => setEditor(null)}
+          onSave={saveNote}
+        />
+      )}
+
+      {editor && editor.kind !== "note" && (
         <EditorModal
           key={`${editor.kind}-${editor.item?.id ?? "new"}`}
           editor={editor}
@@ -4402,6 +4608,515 @@ function DataCenterModal({
   );
 }
 
+function NoteEditorModal({
+  note,
+  ownerKey,
+  onClose,
+  onSave,
+}: {
+  note?: Note;
+  ownerKey: string;
+  onClose: () => void;
+  onSave: (
+    noteId: number | null,
+    fields: NoteDraftFields,
+  ) => Promise<Note>;
+}) {
+  const initialFields = useMemo(() => noteDraftFieldsFrom(note), [note]);
+  const [noteId, setNoteId] = useState<number | null>(note?.id ?? null);
+  const [title, setTitle] = useState(initialFields.title);
+  const [content, setContent] = useState(initialFields.content);
+  const [color, setColor] = useState(initialFields.color);
+  const [pinned, setPinned] = useState(initialFields.pinned);
+  const [tags, setTags] = useState(initialFields.tags);
+  const [saveState, setSaveState] = useState<NoteSaveState>("saved");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [savedFingerprint, setSavedFingerprint] = useState(
+    noteDraftFingerprint(initialFields),
+  );
+  const [fullscreen, setFullscreen] = useState(false);
+  const [stats, setStats] = useState<RichTextStats>({
+    words: 0,
+    characters: 0,
+    readingMinutes: 0,
+  });
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const noteIdRef = useRef(note?.id ?? null);
+  const fieldsRef = useRef(initialFields);
+  const savedFingerprintRef = useRef(savedFingerprint);
+  const failedFingerprintRef = useRef<string | null>(null);
+  const dirtyRef = useRef(false);
+  const closingRef = useRef(false);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const currentFields = useMemo<NoteDraftFields>(
+    () => ({ title, content, color, pinned, tags }),
+    [color, content, pinned, tags, title],
+  );
+  const currentFingerprint = noteDraftFingerprint(currentFields);
+  const isDirty = currentFingerprint !== savedFingerprint;
+
+  useEffect(() => {
+    fieldsRef.current = currentFields;
+    noteIdRef.current = noteId;
+    savedFingerprintRef.current = savedFingerprint;
+  }, [currentFields, noteId, savedFingerprint]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const stored = readStoredNoteDraft(ownerKey, note?.id ?? null);
+      const serverUpdatedAt = note?.updatedAt
+        ? Date.parse(note.updatedAt)
+        : Number.NEGATIVE_INFINITY;
+      const draftUpdatedAt = stored?.updatedAt
+        ? Date.parse(stored.updatedAt)
+        : Number.NEGATIVE_INFINITY;
+      const shouldRestore =
+        stored &&
+        noteDraftFingerprint(stored) !== savedFingerprintRef.current &&
+        (!note || draftUpdatedAt > serverUpdatedAt);
+
+      if (stored && shouldRestore) {
+        setTitle(stored.title);
+        setContent(stored.content);
+        setColor(stored.color);
+        setPinned(stored.pinned);
+        setTags(stored.tags);
+        setDraftRestored(true);
+        setSaveState("dirty");
+      } else if (stored) {
+        clearStoredNoteDraft(ownerKey, note?.id ?? null);
+      }
+      setHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [note, ownerKey]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const isEmptyNewNote =
+      noteId === null && !hasMeaningfulNoteContent(currentFields);
+
+    dirtyRef.current = isDirty && !isEmptyNewNote;
+    if (!isDirty || isEmptyNewNote) {
+      clearStoredNoteDraft(ownerKey, noteId);
+      return;
+    }
+
+    writeStoredNoteDraft(ownerKey, noteId, currentFields);
+  }, [
+    currentFields,
+    hydrated,
+    isDirty,
+    noteId,
+    ownerKey,
+  ]);
+
+  const saveNow = useCallback(() => {
+    const operation = saveQueueRef.current.then(async () => {
+      const fields = fieldsRef.current;
+      const fingerprint = noteDraftFingerprint(fields);
+      if (fingerprint === savedFingerprintRef.current) {
+        dirtyRef.current = false;
+        setSaveState("saved");
+        return true;
+      }
+      if (
+        noteIdRef.current === null &&
+        !hasMeaningfulNoteContent(fields)
+      ) {
+        dirtyRef.current = false;
+        clearStoredNoteDraft(ownerKey, null);
+        setSaveState("saved");
+        return true;
+      }
+      if (!fields.title.trim()) {
+        setSaveState("dirty");
+        setSaveError("Добавьте название, чтобы сохранить заметку в FlowTrack.");
+        titleInputRef.current?.focus();
+        return false;
+      }
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        failedFingerprintRef.current = fingerprint;
+        setSaveState("error");
+        setSaveError(
+          "Нет соединения. Черновик сохранён на устройстве и будет отправлен после восстановления сети.",
+        );
+        writeStoredNoteDraft(ownerKey, noteIdRef.current, fields);
+        return false;
+      }
+
+      setDraftRestored(false);
+      setSaveState("saving");
+      setSaveError(null);
+      failedFingerprintRef.current = null;
+      const previousNoteId = noteIdRef.current;
+
+      try {
+        const savedNote = await onSave(previousNoteId, fields);
+        noteIdRef.current = savedNote.id;
+        setNoteId(savedNote.id);
+        savedFingerprintRef.current = fingerprint;
+        setSavedFingerprint(fingerprint);
+        clearStoredNoteDraft(ownerKey, previousNoteId);
+        clearStoredNoteDraft(ownerKey, savedNote.id);
+
+        const latestFields = fieldsRef.current;
+        const latestFingerprint = noteDraftFingerprint(latestFields);
+        const hasNewChanges = latestFingerprint !== fingerprint;
+        dirtyRef.current = hasNewChanges;
+        if (hasNewChanges) {
+          writeStoredNoteDraft(ownerKey, savedNote.id, latestFields);
+          setSaveState("dirty");
+        } else {
+          setSaveState("saved");
+        }
+        return true;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Не удалось сохранить заметку";
+        failedFingerprintRef.current = fingerprint;
+        dirtyRef.current = true;
+        writeStoredNoteDraft(ownerKey, noteIdRef.current, fields);
+        setSaveState("error");
+        setSaveError(message);
+        return false;
+      }
+    });
+
+    saveQueueRef.current = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }, [onSave, ownerKey]);
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      currentFingerprint === savedFingerprint ||
+      !hasMeaningfulNoteContent(currentFields) ||
+      !title.trim()
+    ) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void saveNow();
+    }, 1200);
+    return () => window.clearTimeout(timeout);
+  }, [
+    currentFields,
+    currentFingerprint,
+    hydrated,
+    saveNow,
+    savedFingerprint,
+    title,
+  ]);
+
+  useEffect(() => {
+    function handleOnline() {
+      if (dirtyRef.current) void saveNow();
+    }
+
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [saveNow]);
+
+  const requestClose = useCallback(async () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    const fields = fieldsRef.current;
+    const isEmptyNewNote =
+      noteIdRef.current === null && !hasMeaningfulNoteContent(fields);
+
+    if (isEmptyNewNote) {
+      clearStoredNoteDraft(ownerKey, null);
+      onClose();
+      return;
+    }
+
+    if (
+      noteDraftFingerprint(fields) !== savedFingerprintRef.current
+    ) {
+      await saveNow();
+    }
+
+    const stillDirty =
+      noteDraftFingerprint(fieldsRef.current) !==
+      savedFingerprintRef.current;
+    if (
+      stillDirty &&
+      !window.confirm(
+        "Изменения ещё не отправлены в FlowTrack, но черновик сохранён на этом устройстве. Всё равно закрыть?",
+      )
+    ) {
+      closingRef.current = false;
+      return;
+    }
+    onClose();
+  }, [onClose, ownerKey, saveNow]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "s"
+      ) {
+        event.preventDefault();
+        void saveNow();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (fullscreen) setFullscreen(false);
+        else void requestClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [fullscreen, requestClose, saveNow]);
+
+  function markEdited() {
+    failedFingerprintRef.current = null;
+    setSaveError(null);
+    setDraftRestored(false);
+    setSaveState((current) =>
+      current === "saving" ? current : "dirty",
+    );
+  }
+
+  const visibleSaveState: NoteSaveState = isDirty
+    ? saveState === "saving" || saveState === "error"
+      ? saveState
+      : "dirty"
+    : "saved";
+  const needsTitle = visibleSaveState === "dirty" && !title.trim();
+  const saveStatusLabel = needsTitle
+    ? "На устройстве · добавьте название"
+    : visibleSaveState === "saving"
+      ? "Сохраняю…"
+      : visibleSaveState === "error"
+        ? "Ошибка сохранения"
+        : visibleSaveState === "dirty"
+          ? draftRestored
+            ? "Черновик восстановлен"
+            : "Есть изменения"
+          : "Сохранено";
+
+  return (
+    <div
+      className={
+        fullscreen
+          ? "modal-backdrop modal-backdrop-note-fullscreen"
+          : "modal-backdrop"
+      }
+      onMouseDown={() => void requestClose()}
+    >
+      <div
+        className={
+          fullscreen
+            ? "modal modal-note modal-note-fullscreen"
+            : "modal modal-note"
+        }
+        role="dialog"
+        aria-modal="true"
+        aria-label={note ? "Редактировать заметку" : "Новая заметка"}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="note-modal-header">
+          <div>
+            <span className="eyebrow">FlowTrack</span>
+            <h2>{note ? "Редактировать заметку" : "Новая заметка"}</h2>
+          </div>
+          <div className="note-modal-header-actions">
+            <div
+              className={`note-save-status note-save-status-${visibleSaveState}`}
+              role="status"
+              aria-live="polite"
+              title={saveError ?? undefined}
+            >
+              {visibleSaveState === "saved" ? (
+                <Check size={14} />
+              ) : visibleSaveState === "error" ? (
+                <CloudOff size={14} />
+              ) : visibleSaveState === "saving" ? (
+                <RotateCcw className="note-save-spinner" size={14} />
+              ) : (
+                <Circle size={10} fill="currentColor" />
+              )}
+              <span>{saveStatusLabel}</span>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setFullscreen((current) => !current)}
+              aria-label={
+                fullscreen
+                  ? "Выйти из полноэкранного режима"
+                  : "Открыть на весь экран"
+              }
+              title={
+                fullscreen
+                  ? "Выйти из полноэкранного режима"
+                  : "На весь экран"
+              }
+            >
+              {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void requestClose()}
+              aria-label="Закрыть"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </header>
+
+        <form
+          className="note-editor-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveNow();
+          }}
+        >
+          <Field label="Название">
+            <input
+              ref={titleInputRef}
+              name="title"
+              value={title}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                markEdited();
+              }}
+              autoFocus
+              placeholder="Короткое понятное название"
+            />
+          </Field>
+
+          <div className="field note-content-field">
+            <span>Содержание</span>
+            <Suspense
+              fallback={
+                <div
+                  className="rich-editor rich-editor-loading"
+                  role="status"
+                >
+                  <input
+                    type="hidden"
+                    name="content"
+                    value={content}
+                    readOnly
+                  />
+                  <span>Загружаем редактор…</span>
+                </div>
+              }
+            >
+              <RichTextEditor
+                name="content"
+                value={content}
+                onChange={(nextContent) => {
+                  setContent(nextContent);
+                  markEdited();
+                }}
+                onStatsChange={setStats}
+              />
+            </Suspense>
+          </div>
+
+          <Field label="Теги через запятую">
+            <input
+              name="tags"
+              value={tags}
+              onChange={(event) => {
+                setTags(event.target.value);
+                markEdited();
+              }}
+            />
+          </Field>
+
+          <div className="form-grid form-grid-note">
+            <Field label="Цвет">
+              <input
+                className="color-input"
+                name="color"
+                type="color"
+                value={color}
+                onChange={(event) => {
+                  setColor(event.target.value);
+                  markEdited();
+                }}
+              />
+            </Field>
+            <label className="check-field">
+              <input
+                name="pinned"
+                type="checkbox"
+                checked={pinned}
+                onChange={(event) => {
+                  setPinned(event.target.checked);
+                  markEdited();
+                }}
+              />
+              <span>
+                <Pin size={15} />
+                Закрепить заметку
+              </span>
+            </label>
+          </div>
+
+          <footer className="modal-actions note-modal-actions">
+            <span className="note-writing-stats">{noteStatsLabel(stats)}</span>
+            <div>
+              {visibleSaveState === "error" && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void saveNow()}
+                >
+                  Повторить
+                </button>
+              )}
+              <span className="note-save-shortcut">Ctrl/⌘ + S</span>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void requestClose()}
+              >
+                Готово
+              </button>
+            </div>
+          </footer>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function EditorModal({
   editor,
   data,
@@ -4546,22 +5261,6 @@ function EditorModal({
       );
     }
 
-    if (editor.kind === "note") {
-      const item = editor.item as Note | undefined;
-      await onMutate(
-        item ? "updateNote" : "createNote",
-        {
-          id: item?.id,
-          title: value(form, "title"),
-          content: value(form, "content"),
-          color: value(form, "color"),
-          tags: value(form, "tags"),
-          pinned: form.get("pinned") === "on",
-        },
-        item ? "Заметка обновлена" : "Заметка создана",
-      );
-    }
-
     if (editor.kind === "goal") {
       const item = editor.item as Goal | undefined;
       await onMutate(
@@ -4585,7 +5284,6 @@ function EditorModal({
   const habit = editor.kind === "habit" ? (editor.item as Habit | undefined) : undefined;
   const task = editor.kind === "task" ? (editor.item as Task | undefined) : undefined;
   const card = editor.kind === "card" ? (editor.item as Card | undefined) : undefined;
-  const note = editor.kind === "note" ? (editor.item as Note | undefined) : undefined;
   const goal = editor.kind === "goal" ? (editor.item as Goal | undefined) : undefined;
   const cardColumns =
     editor.kind === "card" && card
@@ -4626,7 +5324,6 @@ function EditorModal({
             editor.kind === "column" ||
             editor.kind === "card" ||
             editor.kind === "timer" ||
-            editor.kind === "note" ||
             editor.kind === "goal") && (
             <Field label="Название">
               <input
@@ -4637,7 +5334,6 @@ function EditorModal({
                   habit?.title ||
                   task?.title ||
                   card?.title ||
-                  note?.title ||
                   goal?.title ||
                   ""
                 }
@@ -4867,48 +5563,6 @@ function EditorModal({
                       ))}
                   </select>
                 </Field>
-              </div>
-            </>
-          )}
-
-          {editor.kind === "note" && (
-            <>
-              <div className="field">
-                <span>Содержание</span>
-                <Suspense
-                  fallback={
-                    <div
-                      className="rich-editor rich-editor-loading"
-                      role="status"
-                    >
-                      <input
-                        type="hidden"
-                        name="content"
-                        value={note?.content ?? ""}
-                        readOnly
-                      />
-                      <span>Загружаем редактор…</span>
-                    </div>
-                  }
-                >
-                  <RichTextEditor
-                    name="content"
-                    defaultValue={note?.content ?? ""}
-                  />
-                </Suspense>
-              </div>
-              <Field label="Теги через запятую">
-                <input name="tags" defaultValue={note?.tags.join(", ") ?? ""} />
-              </Field>
-              <div className="form-grid form-grid-note">
-                <ColorField defaultValue={note?.color ?? "#fef3c7"} />
-                <label className="check-field">
-                  <input name="pinned" type="checkbox" defaultChecked={note?.pinned} />
-                  <span>
-                    <Pin size={15} />
-                    Закрепить заметку
-                  </span>
-                </label>
               </div>
             </>
           )}
