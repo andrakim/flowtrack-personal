@@ -3483,6 +3483,14 @@ button:disabled {
   box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.1);
 }
 
+.rich-editor-loading {
+  display: grid;
+  min-height: 190px;
+  place-items: center;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .rich-toolbar {
   display: flex;
   align-items: center;
