@@ -1,0 +1,22 @@
+CREATE TABLE `pomodoro_state` (
+	`id` integer PRIMARY KEY NOT NULL,
+	`phase` text DEFAULT 'focus' NOT NULL,
+	`active` integer DEFAULT false NOT NULL,
+	`running` integer DEFAULT false NOT NULL,
+	`cycle` integer DEFAULT 0 NOT NULL,
+	`focus_minutes` integer DEFAULT 25 NOT NULL,
+	`short_break_minutes` integer DEFAULT 5 NOT NULL,
+	`long_break_minutes` integer DEFAULT 15 NOT NULL,
+	`cycles_before_long` integer DEFAULT 4 NOT NULL,
+	`auto_start_break` integer DEFAULT false NOT NULL,
+	`auto_start_focus` integer DEFAULT false NOT NULL,
+	`title` text DEFAULT 'Фокус-сессия' NOT NULL,
+	`project_id` integer,
+	`task_id` integer,
+	`started_at` integer,
+	`ends_at` integer,
+	`remaining_seconds` integer DEFAULT 1500 NOT NULL,
+	`updated_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,
+	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON UPDATE no action ON DELETE set null
+);
