@@ -59,7 +59,11 @@ import {
   LogOut,
   Maximize2,
   Minimize2,
+  Monitor,
+  Moon,
   Pause,
+  Palette,
+  PanelLeft,
   Pin,
   Play,
   Plus,
@@ -68,6 +72,8 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
+  Sun,
   Square,
   StickyNote,
   Target,
@@ -81,6 +87,22 @@ import {
 } from "lucide-react";
 import { dashboardGreeting } from "./dashboard-greeting";
 import type { RichTextStats } from "./rich-text-editor";
+import {
+  applyUiPreferencesToDocument,
+  getClientUiPreferencesSnapshot,
+  getServerUiPreferencesSnapshot,
+  getStoredLastView,
+  resetUiPreferences,
+  storeLastView,
+  storeUiPreferences,
+  subscribeToUiPreferences,
+  type AccentColor,
+  type MotionPreference,
+  type SidebarMode,
+  type StartView,
+  type ThemePreference,
+  type UiScale,
+} from "./ui-preferences";
 
 const RichTextEditor = lazy(() => import("./rich-text-editor"));
 
@@ -92,8 +114,6 @@ type View =
   | "timer"
   | "notes"
   | "goals";
-
-type UiScale = "compact" | "comfortable" | "large";
 
 type Habit = {
   id: number;
@@ -347,10 +367,56 @@ const UI_SCALE_OPTIONS: Array<{
   { id: "comfortable", label: "Комфортный", hint: "По умолчанию" },
   { id: "large", label: "Крупный", hint: "Легче читать" },
 ];
-const DEFAULT_UI_SCALE: UiScale = "comfortable";
-const UI_SCALE_STORAGE_KEY = "flowtrack:ui-scale:v1";
-const UI_SCALE_EVENT = "flowtrack:ui-scale-change";
-let volatileUiScale: UiScale = DEFAULT_UI_SCALE;
+const THEME_OPTIONS: Array<{
+  id: ThemePreference;
+  label: string;
+  hint: string;
+  icon: typeof Sun;
+}> = [
+  { id: "system", label: "Системная", hint: "Как на устройстве", icon: Monitor },
+  { id: "light", label: "Светлая", hint: "Всегда светлая", icon: Sun },
+  { id: "dark", label: "Тёмная", hint: "Мягкий графит", icon: Moon },
+];
+const ACCENT_OPTIONS: Array<{
+  id: AccentColor;
+  label: string;
+  color: string;
+}> = [
+  { id: "violet", label: "Фиолетовый", color: "#7c3aed" },
+  { id: "blue", label: "Синий", color: "#2563eb" },
+  { id: "emerald", label: "Зелёный", color: "#059669" },
+  { id: "orange", label: "Оранжевый", color: "#ea580c" },
+  { id: "graphite", label: "Графитовый", color: "#475569" },
+];
+const SIDEBAR_OPTIONS: Array<{
+  id: SidebarMode;
+  label: string;
+  hint: string;
+}> = [
+  { id: "expanded", label: "Развёрнутая", hint: "Все подписи видны" },
+  { id: "compact", label: "Компактная", hint: "Только значки" },
+  { id: "auto", label: "Автоматически", hint: "По ширине экрана" },
+];
+const START_VIEW_OPTIONS: Array<{
+  id: StartView;
+  label: string;
+  hint: string;
+}> = [
+  { id: "overview", label: "Сегодня", hint: "План текущего дня" },
+  { id: "last", label: "Последний раздел", hint: "Продолжить с того же места" },
+  { id: "schedule", label: "Расписание", hint: "Сразу открыть календарь" },
+];
+const MOTION_OPTIONS: Array<{
+  id: MotionPreference;
+  label: string;
+  hint: string;
+}> = [
+  { id: "system", label: "Системные", hint: "Учитывать устройство" },
+  { id: "full", label: "Полные", hint: "Все переходы" },
+  { id: "reduced", label: "Минимальные", hint: "Меньше движения" },
+];
+const VIEW_IDS: readonly View[] = NAV_ITEMS.map((item) => item.id);
+type SettingsTab = "appearance" | "launch" | "account";
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const PRIORITY_LABELS = {
   low: "Низкий",
@@ -368,52 +434,6 @@ const getClientHourSnapshot = () => new Date().getHours();
 const getServerHourSnapshot = () => 12;
 const SIGN_IN_PATH = "/signin-with-chatgpt?return_to=%2F";
 const DATA_REQUEST_TIMEOUT_MS = 15_000;
-
-function isUiScale(value: string | null): value is UiScale {
-  return value === "compact" || value === "comfortable" || value === "large";
-}
-
-function getClientUiScaleSnapshot(): UiScale {
-  try {
-    const stored = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
-    if (isUiScale(stored)) {
-      volatileUiScale = stored;
-    }
-    return volatileUiScale;
-  } catch {
-    return volatileUiScale;
-  }
-}
-
-function getServerUiScaleSnapshot(): UiScale {
-  return DEFAULT_UI_SCALE;
-}
-
-function subscribeToUiScale(onStoreChange: () => void) {
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key !== UI_SCALE_STORAGE_KEY) return;
-    volatileUiScale = isUiScale(event.newValue)
-      ? event.newValue
-      : DEFAULT_UI_SCALE;
-    onStoreChange();
-  };
-  window.addEventListener("storage", handleStorage);
-  window.addEventListener(UI_SCALE_EVENT, onStoreChange);
-  return () => {
-    window.removeEventListener("storage", handleStorage);
-    window.removeEventListener(UI_SCALE_EVENT, onStoreChange);
-  };
-}
-
-function storeUiScale(scale: UiScale) {
-  volatileUiScale = scale;
-  try {
-    window.localStorage.setItem(UI_SCALE_STORAGE_KEY, scale);
-  } catch {
-    // The preference still applies for the current page if storage is blocked.
-  }
-  window.dispatchEvent(new Event(UI_SCALE_EVENT));
-}
 
 function redirectIfUnauthorized(response: Response) {
   if (response.status !== 401) return false;
@@ -946,20 +966,36 @@ export default function FlowTrackPage({
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const uiScale = useSyncExternalStore(
-    subscribeToUiScale,
-    getClientUiScaleSnapshot,
-    getServerUiScaleSnapshot,
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const startViewApplied = useRef(false);
+  const uiPreferences = useSyncExternalStore(
+    subscribeToUiPreferences,
+    getClientUiPreferencesSnapshot,
+    getServerUiPreferencesSnapshot,
   );
 
   useEffect(() => {
-    document.documentElement.dataset.flowtrackScale = uiScale;
-    return () => {
-      if (document.documentElement.dataset.flowtrackScale === uiScale) {
-        delete document.documentElement.dataset.flowtrackScale;
-      }
+    applyUiPreferencesToDocument(uiPreferences);
+  }, [uiPreferences]);
+
+  useEffect(() => {
+    if (startViewApplied.current) return;
+    startViewApplied.current = true;
+    const nextView =
+      uiPreferences.startView === "last"
+        ? getStoredLastView(VIEW_IDS, "overview")
+        : uiPreferences.startView;
+    setView(nextView);
+  }, [uiPreferences.startView]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAccountMenuOpen(false);
     };
-  }, [uiScale]);
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [accountMenuOpen]);
 
   async function loadData() {
     try {
@@ -1122,9 +1158,15 @@ export default function FlowTrackPage({
 
   function navigate(next: View) {
     setView(next);
+    storeLastView(next);
     setMobileOpen(false);
     setSearchOpen(false);
     setAccountMenuOpen(false);
+  }
+
+  function openSettings(tab: SettingsTab = "appearance") {
+    setSettingsTab(tab);
+    setAccountMenuOpen(true);
   }
 
   useEffect(() => {
@@ -1185,7 +1227,14 @@ export default function FlowTrackPage({
   const isOwner = data.viewer?.role === "owner";
 
   return (
-    <div className="app-shell" data-ui-scale={uiScale}>
+    <div
+      className="app-shell"
+      data-ui-scale={uiPreferences.scale}
+      data-sidebar-mode={uiPreferences.sidebar}
+      data-ui-theme={uiPreferences.theme}
+      data-ui-accent={uiPreferences.accent}
+      data-ui-motion={uiPreferences.motion}
+    >
       <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-mark">
@@ -1210,6 +1259,7 @@ export default function FlowTrackPage({
               key={id}
               className={view === id ? "nav-item nav-item-active" : "nav-item"}
               onClick={() => navigate(id)}
+              title={label}
             >
               <Icon size={19} />
               <span>{label}</span>
@@ -1260,7 +1310,7 @@ export default function FlowTrackPage({
           <button
             className="account-card"
             type="button"
-            onClick={() => setAccountMenuOpen(true)}
+            onClick={() => openSettings()}
             aria-label="Открыть профиль и настройки интерфейса"
           >
             <div className="account-avatar" aria-hidden="true">
@@ -1298,7 +1348,7 @@ export default function FlowTrackPage({
           <button
             className="mobile-account"
             type="button"
-            onClick={() => setAccountMenuOpen(true)}
+            onClick={() => openSettings()}
             title={`${currentUser.displayName} · профиль`}
             aria-label="Открыть профиль"
           >
@@ -1454,93 +1504,433 @@ export default function FlowTrackPage({
 
       {accountMenuOpen && (
         <div
-          className="account-menu-backdrop"
+          className="settings-backdrop"
           onMouseDown={() => setAccountMenuOpen(false)}
         >
           <section
-            className="account-menu"
+            className="settings-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="Профиль пользователя"
+            aria-label="Настройки FlowTrack"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header>
-              <div className="account-avatar account-menu-avatar">
-                {accountInitials(currentUser)}
-              </div>
-              <div className="account-menu-copy">
-                <strong>{currentUser.displayName}</strong>
-                <span>{currentUser.email}</span>
-                <small>{isOwner ? "Владелец FlowTrack" : "Личный кабинет"}</small>
+            <header className="settings-header">
+              <div className="settings-header-title">
+                <span className="settings-header-icon" aria-hidden="true">
+                  <SlidersHorizontal size={19} />
+                </span>
+                <span>
+                  <strong>Настройки</strong>
+                  <small>Применяются сразу на этом устройстве</small>
+                </span>
               </div>
               <button
                 className="icon-button"
                 type="button"
                 onClick={() => setAccountMenuOpen(false)}
-                aria-label="Закрыть профиль"
+                aria-label="Закрыть настройки"
               >
                 <X size={18} />
               </button>
             </header>
-            <div className="account-preferences">
-              <div className="account-preferences-heading">
-                <span className="account-preferences-icon" aria-hidden="true">
-                  <Settings2 size={17} />
-                </span>
-                <span>
-                  <strong>Масштаб интерфейса</strong>
-                  <small>Сохраняется отдельно на этом устройстве</small>
-                </span>
-              </div>
-              <div
-                className="ui-scale-options"
-                role="radiogroup"
-                aria-label="Масштаб интерфейса"
+
+            <div className="settings-layout">
+              <nav
+                className="settings-tabs"
+                role="tablist"
+                aria-label="Разделы настроек"
               >
-                {UI_SCALE_OPTIONS.map((option) => (
-                  <button
-                    key={option.id}
-                    className={
-                      uiScale === option.id
-                        ? "ui-scale-option ui-scale-option-active"
-                        : "ui-scale-option"
-                    }
-                    type="button"
-                    role="radio"
-                    aria-checked={uiScale === option.id}
-                    onClick={() => storeUiScale(option.id)}
+                <button
+                  className={
+                    settingsTab === "appearance"
+                      ? "settings-tab settings-tab-active"
+                      : "settings-tab"
+                  }
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "appearance"}
+                  aria-controls="settings-panel-appearance"
+                  onClick={() => setSettingsTab("appearance")}
+                >
+                  <Palette size={18} />
+                  <span>Внешний вид</span>
+                </button>
+                <button
+                  className={
+                    settingsTab === "launch"
+                      ? "settings-tab settings-tab-active"
+                      : "settings-tab"
+                  }
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "launch"}
+                  aria-controls="settings-panel-launch"
+                  onClick={() => setSettingsTab("launch")}
+                >
+                  <LayoutDashboard size={18} />
+                  <span>Запуск</span>
+                </button>
+                <button
+                  className={
+                    settingsTab === "account"
+                      ? "settings-tab settings-tab-active"
+                      : "settings-tab"
+                  }
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "account"}
+                  aria-controls="settings-panel-account"
+                  onClick={() => setSettingsTab("account")}
+                >
+                  <UserRound size={18} />
+                  <span>Аккаунт</span>
+                </button>
+                <p>
+                  Оформление хранится локально, поэтому на телефоне можно выбрать
+                  другие параметры.
+                </p>
+              </nav>
+
+              <div className="settings-content">
+                {settingsTab === "appearance" && (
+                  <div
+                    className="settings-panel"
+                    id="settings-panel-appearance"
+                    role="tabpanel"
                   >
-                    <span
-                      className={`ui-scale-sample ui-scale-sample-${option.id}`}
-                      aria-hidden="true"
-                    >
-                      Aa
-                    </span>
-                    <strong>{option.label}</strong>
-                    <small>{option.hint}</small>
-                  </button>
-                ))}
+                    <div className="settings-panel-heading">
+                      <span>
+                        <strong>Внешний вид</strong>
+                        <small>Настройте интерфейс под свой экран и освещение</small>
+                      </span>
+                    </div>
+
+                    <section className="preference-section">
+                      <div className="preference-heading">
+                        <strong>Тема</strong>
+                        <small>Системная меняется вместе с Windows или телефоном</small>
+                      </div>
+                      <div
+                        className="theme-options"
+                        role="radiogroup"
+                        aria-label="Тема интерфейса"
+                      >
+                        {THEME_OPTIONS.map((option) => {
+                          const Icon = option.icon;
+                          return (
+                            <button
+                              key={option.id}
+                              className={
+                                uiPreferences.theme === option.id
+                                  ? "theme-option preference-option-active"
+                                  : "theme-option"
+                              }
+                              type="button"
+                              role="radio"
+                              aria-checked={uiPreferences.theme === option.id}
+                              onClick={() =>
+                                storeUiPreferences({ theme: option.id })
+                              }
+                            >
+                              <span
+                                className={`theme-preview theme-preview-${option.id}`}
+                                aria-hidden="true"
+                              >
+                                <Icon size={18} />
+                              </span>
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+
+                    <section className="preference-section preference-section-inline">
+                      <div className="preference-heading">
+                        <strong>Акцентный цвет</strong>
+                        <small>Кнопки, выделения и активные элементы</small>
+                      </div>
+                      <div
+                        className="accent-options"
+                        role="radiogroup"
+                        aria-label="Акцентный цвет"
+                      >
+                        {ACCENT_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            className={
+                              uiPreferences.accent === option.id
+                                ? "accent-option accent-option-active"
+                                : "accent-option"
+                            }
+                            type="button"
+                            role="radio"
+                            aria-label={option.label}
+                            aria-checked={uiPreferences.accent === option.id}
+                            title={option.label}
+                            onClick={() =>
+                              storeUiPreferences({ accent: option.id })
+                            }
+                          >
+                            <span
+                              style={{ backgroundColor: option.color }}
+                              aria-hidden="true"
+                            />
+                            <Check size={13} aria-hidden="true" />
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="preference-section">
+                      <div className="preference-heading">
+                        <strong>Масштаб интерфейса</strong>
+                        <small>Безопасное увеличение без браузерного зума</small>
+                      </div>
+                      <div
+                        className="ui-scale-options"
+                        role="radiogroup"
+                        aria-label="Масштаб интерфейса"
+                      >
+                        {UI_SCALE_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            className={
+                              uiPreferences.scale === option.id
+                                ? "ui-scale-option ui-scale-option-active"
+                                : "ui-scale-option"
+                            }
+                            type="button"
+                            role="radio"
+                            aria-checked={uiPreferences.scale === option.id}
+                            onClick={() =>
+                              storeUiPreferences({ scale: option.id })
+                            }
+                          >
+                            <span
+                              className={`ui-scale-sample ui-scale-sample-${option.id}`}
+                              aria-hidden="true"
+                            >
+                              Aa
+                            </span>
+                            <strong>{option.label}</strong>
+                            <small>{option.hint}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="preference-section">
+                      <div className="preference-heading">
+                        <strong>Боковая панель</strong>
+                        <small>На телефоне нижнее меню останется без изменений</small>
+                      </div>
+                      <div
+                        className="preference-card-options"
+                        role="radiogroup"
+                        aria-label="Режим боковой панели"
+                      >
+                        {SIDEBAR_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            className={
+                              uiPreferences.sidebar === option.id
+                                ? "preference-card preference-option-active"
+                                : "preference-card"
+                            }
+                            type="button"
+                            role="radio"
+                            aria-checked={uiPreferences.sidebar === option.id}
+                            onClick={() =>
+                              storeUiPreferences({ sidebar: option.id })
+                            }
+                          >
+                            <PanelLeft size={18} aria-hidden="true" />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="preference-section">
+                      <div className="preference-heading">
+                        <strong>Анимации</strong>
+                        <small>Минимальный режим снижает визуальное движение</small>
+                      </div>
+                      <div
+                        className="preference-card-options"
+                        role="radiogroup"
+                        aria-label="Анимации интерфейса"
+                      >
+                        {MOTION_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            className={
+                              uiPreferences.motion === option.id
+                                ? "preference-card preference-option-active"
+                                : "preference-card"
+                            }
+                            type="button"
+                            role="radio"
+                            aria-checked={uiPreferences.motion === option.id}
+                            onClick={() =>
+                              storeUiPreferences({ motion: option.id })
+                            }
+                          >
+                            <Settings2 size={18} aria-hidden="true" />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+                )}
+
+                {settingsTab === "launch" && (
+                  <div
+                    className="settings-panel"
+                    id="settings-panel-launch"
+                    role="tabpanel"
+                  >
+                    <div className="settings-panel-heading">
+                      <span>
+                        <strong>Запуск FlowTrack</strong>
+                        <small>Выберите, что показывать после открытия приложения</small>
+                      </span>
+                    </div>
+                    <section className="preference-section">
+                      <div className="preference-heading">
+                        <strong>Стартовый раздел</strong>
+                        <small>Настройка начнёт действовать при следующем запуске</small>
+                      </div>
+                      <div
+                        className="start-view-options"
+                        role="radiogroup"
+                        aria-label="Стартовый раздел"
+                      >
+                        {START_VIEW_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            className={
+                              uiPreferences.startView === option.id
+                                ? "start-view-option preference-option-active"
+                                : "start-view-option"
+                            }
+                            type="button"
+                            role="radio"
+                            aria-checked={uiPreferences.startView === option.id}
+                            onClick={() =>
+                              storeUiPreferences({ startView: option.id })
+                            }
+                          >
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                            </span>
+                            <Check size={17} aria-hidden="true" />
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                    <div className="settings-info-card">
+                      <LayoutDashboard size={20} />
+                      <span>
+                        <strong>Рекомендация FlowTrack</strong>
+                        <small>
+                          «Сегодня» лучше подходит для ежедневного планирования,
+                          а «Последний раздел» — для длинной работы с проектами и
+                          заметками.
+                        </small>
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === "account" && (
+                  <div
+                    className="settings-panel"
+                    id="settings-panel-account"
+                    role="tabpanel"
+                  >
+                    <div className="settings-profile-card">
+                      <div className="account-avatar settings-profile-avatar">
+                        {accountInitials(currentUser)}
+                      </div>
+                      <span>
+                        <strong>{currentUser.displayName}</strong>
+                        <small>{currentUser.email}</small>
+                        <em>
+                          {isOwner ? "Владелец FlowTrack" : "Личный кабинет"}
+                        </em>
+                      </span>
+                    </div>
+
+                    <div className="settings-action-list">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountMenuOpen(false);
+                          setDataCenterOpen(true);
+                        }}
+                      >
+                        <Database size={19} />
+                        <span>
+                          <strong>Данные и резервные копии</strong>
+                          <small>Экспорт, импорт и управление данными</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                      {isOwner && (
+                        <a href="/admin">
+                          <ShieldCheck size={19} />
+                          <span>
+                            <strong>Администрирование</strong>
+                            <small>Пользователи и статистика</small>
+                          </span>
+                          <ChevronRight size={17} />
+                        </a>
+                      )}
+                      <button
+                        className="settings-reset-action"
+                        type="button"
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              "Вернуть стандартную тему, масштаб и поведение интерфейса?",
+                            )
+                          ) {
+                            return;
+                          }
+                          resetUiPreferences();
+                          setToast({ message: "Настройки интерфейса сброшены" });
+                        }}
+                      >
+                        <RotateCcw size={19} />
+                        <span>
+                          <strong>Сбросить настройки интерфейса</strong>
+                          <small>Вернуть рекомендуемые значения</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                      <a className="settings-signout-action" href={signOutHref}>
+                        <LogOut size={19} />
+                        <span>
+                          <strong>Выйти из аккаунта</strong>
+                          <small>Завершить текущую сессию</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-            <div className="account-menu-actions">
-              {isOwner && (
-                <a href="/admin">
-                  <ShieldCheck size={18} />
-                  <span>
-                    <strong>Администрирование</strong>
-                    Пользователи и статистика
-                  </span>
-                  <ChevronRight size={17} />
-                </a>
-              )}
-              <a className="account-menu-signout" href={signOutHref}>
-                <LogOut size={18} />
-                <span>
-                  <strong>Выйти из аккаунта</strong>
-                  Завершить текущую сессию
-                </span>
-                <ChevronRight size={17} />
-              </a>
             </div>
           </section>
         </div>

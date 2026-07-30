@@ -4,16 +4,30 @@ import test from "node:test";
 
 const appUrl = new URL("../app/flowtrack-app.tsx", import.meta.url);
 const stylesUrl = new URL("../app/globals.css", import.meta.url);
+const preferencesUrl = new URL("../app/ui-preferences.ts", import.meta.url);
 
 test("offers three device-local interface scales with a comfortable default", async () => {
-  const source = await readFile(appUrl, "utf8");
+  const [source, preferences] = await Promise.all([
+    readFile(appUrl, "utf8"),
+    readFile(preferencesUrl, "utf8"),
+  ]);
 
-  assert.match(source, /type UiScale = "compact" \| "comfortable" \| "large"/);
-  assert.match(source, /DEFAULT_UI_SCALE: UiScale = "comfortable"/);
-  assert.match(source, /flowtrack:ui-scale:v1/);
-  assert.match(source, /window\.localStorage\.setItem\(UI_SCALE_STORAGE_KEY, scale\)/);
+  assert.match(
+    preferences,
+    /type UiScale = "compact" \| "comfortable" \| "large"/,
+  );
+  assert.match(preferences, /scale: "comfortable"/);
+  assert.match(preferences, /flowtrack:ui-preferences:v1/);
+  assert.match(preferences, /flowtrack:ui-scale:v1/);
+  assert.match(
+    preferences,
+    /window\.localStorage\.setItem\(\s*UI_PREFERENCES_STORAGE_KEY/,
+  );
   assert.match(source, /role="radiogroup"/);
-  assert.match(source, /aria-checked=\{uiScale === option\.id\}/);
+  assert.match(
+    source,
+    /aria-checked=\{uiPreferences\.scale === option\.id\}/,
+  );
 });
 
 test("scales design tokens without browser zoom or transformed app geometry", async () => {
