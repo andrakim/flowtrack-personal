@@ -617,21 +617,29 @@ export async function POST(request: Request) {
           .from(habitLogs)
           .where(and(eq(habitLogs.habitId, habitId), eq(habitLogs.date, date)))
           .limit(1);
-        const completed = !existing?.completed;
+        const completed =
+          typeof payload.completed === "boolean"
+            ? payload.completed
+            : !existing?.completed;
+        let habitLog: typeof habitLogs.$inferSelect | undefined;
         if (existing) {
-          await db
+          [habitLog] = await db
             .update(habitLogs)
             .set({ completed, count: completed ? 1 : 0 })
-            .where(eq(habitLogs.id, existing.id));
+            .where(eq(habitLogs.id, existing.id))
+            .returning();
         } else {
-          await db.insert(habitLogs).values({
-            habitId,
-            date,
-            completed: true,
-            count: 1,
-          });
+          [habitLog] = await db
+            .insert(habitLogs)
+            .values({
+              habitId,
+              date,
+              completed,
+              count: completed ? 1 : 0,
+            })
+            .returning();
         }
-        return ok({ completed });
+        return ok({ completed, habitLog });
       }
 
       case "createTask": {
