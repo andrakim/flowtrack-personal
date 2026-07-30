@@ -93,6 +93,8 @@ type View =
   | "notes"
   | "goals";
 
+type UiScale = "compact" | "comfortable" | "large";
+
 type Habit = {
   id: number;
   title: string;
@@ -336,6 +338,19 @@ const NAV_ITEMS = [
   { id: "goals" as const, label: "Цели", icon: Flag },
 ];
 
+const UI_SCALE_OPTIONS: Array<{
+  id: UiScale;
+  label: string;
+  hint: string;
+}> = [
+  { id: "compact", label: "Компактный", hint: "Больше данных" },
+  { id: "comfortable", label: "Комфортный", hint: "По умолчанию" },
+  { id: "large", label: "Крупный", hint: "Легче читать" },
+];
+const DEFAULT_UI_SCALE: UiScale = "comfortable";
+const UI_SCALE_STORAGE_KEY = "flowtrack:ui-scale:v1";
+const UI_SCALE_EVENT = "flowtrack:ui-scale-change";
+let volatileUiScale: UiScale = DEFAULT_UI_SCALE;
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const PRIORITY_LABELS = {
   low: "Низкий",
@@ -353,6 +368,52 @@ const getClientHourSnapshot = () => new Date().getHours();
 const getServerHourSnapshot = () => 12;
 const SIGN_IN_PATH = "/signin-with-chatgpt?return_to=%2F";
 const DATA_REQUEST_TIMEOUT_MS = 15_000;
+
+function isUiScale(value: string | null): value is UiScale {
+  return value === "compact" || value === "comfortable" || value === "large";
+}
+
+function getClientUiScaleSnapshot(): UiScale {
+  try {
+    const stored = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
+    if (isUiScale(stored)) {
+      volatileUiScale = stored;
+    }
+    return volatileUiScale;
+  } catch {
+    return volatileUiScale;
+  }
+}
+
+function getServerUiScaleSnapshot(): UiScale {
+  return DEFAULT_UI_SCALE;
+}
+
+function subscribeToUiScale(onStoreChange: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== UI_SCALE_STORAGE_KEY) return;
+    volatileUiScale = isUiScale(event.newValue)
+      ? event.newValue
+      : DEFAULT_UI_SCALE;
+    onStoreChange();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(UI_SCALE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(UI_SCALE_EVENT, onStoreChange);
+  };
+}
+
+function storeUiScale(scale: UiScale) {
+  volatileUiScale = scale;
+  try {
+    window.localStorage.setItem(UI_SCALE_STORAGE_KEY, scale);
+  } catch {
+    // The preference still applies for the current page if storage is blocked.
+  }
+  window.dispatchEvent(new Event(UI_SCALE_EVENT));
+}
 
 function redirectIfUnauthorized(response: Response) {
   if (response.status !== 401) return false;
@@ -885,6 +946,20 @@ export default function FlowTrackPage({
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const uiScale = useSyncExternalStore(
+    subscribeToUiScale,
+    getClientUiScaleSnapshot,
+    getServerUiScaleSnapshot,
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.flowtrackScale = uiScale;
+    return () => {
+      if (document.documentElement.dataset.flowtrackScale === uiScale) {
+        delete document.documentElement.dataset.flowtrackScale;
+      }
+    };
+  }, [uiScale]);
 
   async function loadData() {
     try {
@@ -1110,7 +1185,7 @@ export default function FlowTrackPage({
   const isOwner = data.viewer?.role === "owner";
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-ui-scale={uiScale}>
       <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-mark">
@@ -1182,7 +1257,12 @@ export default function FlowTrackPage({
               <span>Администрирование</span>
             </a>
           )}
-          <div className="account-card">
+          <button
+            className="account-card"
+            type="button"
+            onClick={() => setAccountMenuOpen(true)}
+            aria-label="Открыть профиль и настройки интерфейса"
+          >
             <div className="account-avatar" aria-hidden="true">
               {accountInitials(currentUser)}
             </div>
@@ -1190,15 +1270,10 @@ export default function FlowTrackPage({
               <strong>{currentUser.displayName}</strong>
               <span>{currentUser.email}</span>
             </div>
-            <a
-              className="account-signout"
-              href={signOutHref}
-              title="Выйти из аккаунта"
-              aria-label="Выйти из аккаунта"
-            >
-              <LogOut size={16} />
-            </a>
-          </div>
+            <span className="account-open" aria-hidden="true">
+              <Settings2 size={16} />
+            </span>
+          </button>
         </div>
       </aside>
 
@@ -1407,6 +1482,46 @@ export default function FlowTrackPage({
                 <X size={18} />
               </button>
             </header>
+            <div className="account-preferences">
+              <div className="account-preferences-heading">
+                <span className="account-preferences-icon" aria-hidden="true">
+                  <Settings2 size={17} />
+                </span>
+                <span>
+                  <strong>Масштаб интерфейса</strong>
+                  <small>Сохраняется отдельно на этом устройстве</small>
+                </span>
+              </div>
+              <div
+                className="ui-scale-options"
+                role="radiogroup"
+                aria-label="Масштаб интерфейса"
+              >
+                {UI_SCALE_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    className={
+                      uiScale === option.id
+                        ? "ui-scale-option ui-scale-option-active"
+                        : "ui-scale-option"
+                    }
+                    type="button"
+                    role="radio"
+                    aria-checked={uiScale === option.id}
+                    onClick={() => storeUiScale(option.id)}
+                  >
+                    <span
+                      className={`ui-scale-sample ui-scale-sample-${option.id}`}
+                      aria-hidden="true"
+                    >
+                      Aa
+                    </span>
+                    <strong>{option.label}</strong>
+                    <small>{option.hint}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="account-menu-actions">
               {isOwner && (
                 <a href="/admin">
