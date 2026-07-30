@@ -3471,6 +3471,116 @@ button:disabled {
   scroll-padding-top: 54px;
 }
 
+.modal-backdrop-note-fullscreen {
+  align-items: stretch;
+  padding: 0;
+}
+
+.modal-note-fullscreen {
+  width: 100%;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.note-modal-header {
+  gap: 16px;
+}
+
+.note-modal-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.note-save-status {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  padding: 6px 10px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.note-save-status-saved {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.note-save-status-dirty {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.note-save-status-saving {
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.note-save-status-error {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.note-save-spinner {
+  animation: note-save-spin 900ms linear infinite;
+}
+
+@keyframes note-save-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.note-editor-form {
+  min-height: 0;
+}
+
+.note-content-field {
+  min-height: 0;
+}
+
+.modal-note-fullscreen .rich-editor .tiptap {
+  min-height: max(360px, calc(100dvh - 430px));
+}
+
+.note-modal-actions {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.note-modal-actions > div {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.note-writing-stats {
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.note-save-shortcut {
+  color: #94a3b8;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .rich-editor {
   overflow: visible;
   border: 1px solid #e2e8f0;
@@ -3892,6 +4002,34 @@ button:disabled {
     width: 100%;
   }
 
+  .modal-note-fullscreen {
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .note-modal-header {
+    align-items: center;
+  }
+
+  .note-save-status {
+    max-width: min(48vw, 220px);
+  }
+
+  .note-save-status span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .note-modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .note-modal-actions > div {
+    justify-content: space-between;
+  }
+
   .rich-editor .tiptap {
     min-height: 250px;
     padding: 15px;
@@ -3916,6 +4054,42 @@ button:disabled {
 
   .backup-preview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .note-modal-header {
+    align-items: flex-start;
+    padding: 15px 14px 12px !important;
+  }
+
+  .note-modal-header > div:first-child {
+    min-width: 0;
+  }
+
+  .note-modal-header h2 {
+    font-size: 16px;
+  }
+
+  .note-modal-header-actions {
+    gap: 4px;
+  }
+
+  .note-save-status {
+    max-width: 132px;
+    padding-inline: 8px;
+  }
+
+  .note-editor-form {
+    padding: 15px 14px 18px !important;
+  }
+
+  .note-save-shortcut {
+    display: none;
+  }
+
+  .note-modal-actions > div {
+    justify-content: flex-end;
   }
 }
 
