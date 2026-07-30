@@ -3468,10 +3468,11 @@ button:disabled {
 
 .modal-note {
   width: min(780px, 100%);
+  scroll-padding-top: 54px;
 }
 
 .rich-editor {
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   background: #ffffff;
@@ -3492,13 +3493,19 @@ button:disabled {
 }
 
 .rich-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: 5px;
   overflow-x: auto;
   border-bottom: 1px solid #e2e8f0;
+  border-radius: 13px 13px 0 0;
   background: #f8fafc;
   padding: 7px;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
 
