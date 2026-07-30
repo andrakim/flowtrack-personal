@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -20,6 +20,12 @@ import {
   Strikethrough,
   Undo2,
 } from "lucide-react";
+
+export type RichTextStats = {
+  words: number;
+  characters: number;
+  readingMinutes: number;
+};
 
 function escapeHtml(value: string) {
   return value
@@ -43,6 +49,16 @@ function normalizeRichContent(content: string) {
         `<p>${escapeHtml(paragraph).replaceAll("\n", "<br>")}</p>`,
     )
     .join("");
+}
+
+function editorStats(text: string): RichTextStats {
+  const trimmed = text.trim();
+  const words = trimmed ? trimmed.split(/\s+/u).filter(Boolean).length : 0;
+  return {
+    words,
+    characters: Array.from(text).length,
+    readingMinutes: words ? Math.max(1, Math.ceil(words / 200)) : 0,
+  };
 }
 
 function RichToolbarButton({
@@ -74,14 +90,17 @@ function RichToolbarButton({
 
 export default function RichTextEditor({
   name,
-  defaultValue,
+  value,
+  onChange,
+  onStatsChange,
 }: {
   name: string;
-  defaultValue: string;
+  value: string;
+  onChange: (html: string, stats: RichTextStats) => void;
+  onStatsChange?: (stats: RichTextStats) => void;
 }) {
-  const initialContent = normalizeRichContent(defaultValue);
-  const [html, setHtml] = useState(initialContent);
   const [, setRevision] = useState(0);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -97,14 +116,33 @@ export default function RichTextEditor({
       TaskList,
       TaskItem.configure({ nested: true }),
     ],
-    content: initialContent,
+    content: normalizeRichContent(value),
     immediatelyRender: false,
+    onCreate: ({ editor: activeEditor }) => {
+      const nextHtml = activeEditor.getHTML();
+      const stats = editorStats(activeEditor.getText({ blockSeparator: "\n" }));
+      onChange(nextHtml, stats);
+      onStatsChange?.(stats);
+    },
     onUpdate: ({ editor: activeEditor }) => {
-      setHtml(activeEditor.getHTML());
+      const nextHtml = activeEditor.getHTML();
+      const stats = editorStats(activeEditor.getText({ blockSeparator: "\n" }));
+      onChange(nextHtml, stats);
+      onStatsChange?.(stats);
       setRevision((value) => value + 1);
     },
     onSelectionUpdate: () => setRevision((value) => value + 1),
   });
+
+  useEffect(() => {
+    if (!editor) return;
+    const normalized = normalizeRichContent(value);
+    if (editor.getHTML() === normalized) return;
+    editor.commands.setContent(normalized, { emitUpdate: false });
+    onStatsChange?.(
+      editorStats(editor.getText({ blockSeparator: "\n" })),
+    );
+  }, [editor, onStatsChange, value]);
 
   function updateLink() {
     if (!editor) return;
@@ -125,7 +163,7 @@ export default function RichTextEditor({
 
   return (
     <div className="rich-editor">
-      <input type="hidden" name={name} value={html} />
+      <input type="hidden" name={name} value={value} />
       <div className="rich-toolbar" role="toolbar" aria-label="Форматирование">
         <div>
           <RichToolbarButton
