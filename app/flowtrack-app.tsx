@@ -61,6 +61,7 @@ import {
   Minimize2,
   Monitor,
   Moon,
+  MoreHorizontal,
   Pause,
   Palette,
   PanelLeft,
@@ -353,6 +354,19 @@ const NAV_ITEMS = [
   { id: "habits" as const, label: "Привычки", icon: Target },
   { id: "schedule" as const, label: "Расписание", icon: CalendarDays },
   { id: "projects" as const, label: "Проекты", icon: FolderKanban },
+  { id: "timer" as const, label: "Таймер", icon: Timer },
+  { id: "notes" as const, label: "Заметки", icon: StickyNote },
+  { id: "goals" as const, label: "Цели", icon: Flag },
+];
+
+const MOBILE_PRIMARY_NAV_ITEMS = [
+  { id: "overview" as const, label: "Сегодня", icon: LayoutDashboard },
+  { id: "habits" as const, label: "Привычки", icon: Target },
+  { id: "schedule" as const, label: "План", icon: CalendarDays },
+  { id: "projects" as const, label: "Проекты", icon: FolderKanban },
+];
+
+const MOBILE_MORE_NAV_ITEMS = [
   { id: "timer" as const, label: "Таймер", icon: Timer },
   { id: "notes" as const, label: "Заметки", icon: StickyNote },
   { id: "goals" as const, label: "Цели", icon: Flag },
@@ -933,6 +947,28 @@ function calculateStreak(habitId: number, logs: HabitLog[]) {
   return streak;
 }
 
+function habitLogKey(habitId: number, date: string) {
+  return `${habitId}:${date}`;
+}
+
+function replaceHabitLog(
+  logs: HabitLog[],
+  habitId: number,
+  date: string,
+  nextLog: HabitLog | null,
+) {
+  const index = logs.findIndex(
+    (log) => log.habitId === habitId && log.date === date,
+  );
+  if (!nextLog) {
+    return index < 0 ? logs : logs.filter((_, logIndex) => logIndex !== index);
+  }
+  if (index < 0) return [...logs, nextLog];
+  const nextLogs = [...logs];
+  nextLogs[index] = nextLog;
+  return nextLogs;
+}
+
 function itemProject(projects: Project[], id: number | null) {
   return id ? projects.find((project) => project.id === id) : undefined;
 }
@@ -958,9 +994,13 @@ export default function FlowTrackPage({
   const [data, setData] = useState<AppData>(EMPTY_DATA);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const habitSaves = useRef(new Set<string>());
+  const [savingHabitKeys, setSavingHabitKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [dataCenterOpen, setDataCenterOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
@@ -989,13 +1029,15 @@ export default function FlowTrackPage({
   }, [uiPreferences.startView]);
 
   useEffect(() => {
-    if (!accountMenuOpen) return;
+    if (!accountMenuOpen && !mobileMoreOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setAccountMenuOpen(false);
+      if (event.key !== "Escape") return;
+      if (accountMenuOpen) setAccountMenuOpen(false);
+      else setMobileMoreOpen(false);
     };
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, [accountMenuOpen]);
+  }, [accountMenuOpen, mobileMoreOpen]);
 
   async function loadData() {
     try {
@@ -1106,6 +1148,104 @@ export default function FlowTrackPage({
     }
   }
 
+  async function setHabitCompletion(
+    habitId: number,
+    date: string,
+    completed: boolean,
+  ) {
+    const saveKey = habitLogKey(habitId, date);
+    if (habitSaves.current.has(saveKey)) return false;
+
+    const previousLog =
+      data.habitLogs.find(
+        (log) => log.habitId === habitId && log.date === date,
+      ) ?? null;
+    const optimisticLog: HabitLog = previousLog
+      ? {
+          ...previousLog,
+          completed,
+          count: completed ? Math.max(previousLog.count, 1) : 0,
+        }
+      : {
+          id: -(Date.now() + habitId),
+          habitId,
+          date,
+          completed,
+          count: completed ? 1 : 0,
+        };
+
+    habitSaves.current.add(saveKey);
+    setSavingHabitKeys((current) => new Set(current).add(saveKey));
+    setData((current) => ({
+      ...current,
+      habitLogs: replaceHabitLog(
+        current.habitLogs,
+        habitId,
+        date,
+        optimisticLog,
+      ),
+    }));
+
+    try {
+      const response = await fetchDataRequest("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "toggleHabit",
+          payload: { habitId, date, completed },
+        }),
+      });
+      if (redirectIfUnauthorized(response)) {
+        throw new Error("Сессия завершена. Войдите снова, чтобы сохранить отметку.");
+      }
+      const result = (await response.json()) as {
+        error?: string;
+        habitLog?: HabitLog;
+      };
+      if (!response.ok) {
+        throw new Error(result.error || "Не удалось сохранить отметку");
+      }
+
+      setData((current) => ({
+        ...current,
+        habitLogs: replaceHabitLog(
+          current.habitLogs,
+          habitId,
+          date,
+          result.habitLog ?? optimisticLog,
+        ),
+      }));
+      setToast({
+        message: completed ? "Привычка выполнена" : "Отметка снята",
+      });
+      setError(null);
+      return true;
+    } catch (mutationError) {
+      setData((current) => ({
+        ...current,
+        habitLogs: replaceHabitLog(
+          current.habitLogs,
+          habitId,
+          date,
+          previousLog,
+        ),
+      }));
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось сохранить отметку",
+      );
+      return false;
+    } finally {
+      habitSaves.current.delete(saveKey);
+      setSavingHabitKeys((current) => {
+        const next = new Set(current);
+        next.delete(saveKey);
+        return next;
+      });
+    }
+  }
+
   const saveNote = useCallback(
     async (noteId: number | null, fields: NoteDraftFields) => {
       const response = await fetchDataRequest("/api/data", {
@@ -1159,13 +1299,14 @@ export default function FlowTrackPage({
   function navigate(next: View) {
     setView(next);
     storeLastView(next);
-    setMobileOpen(false);
+    setMobileMoreOpen(false);
     setSearchOpen(false);
     setAccountMenuOpen(false);
   }
 
   function openSettings(tab: SettingsTab = "appearance") {
     setSettingsTab(tab);
+    setMobileMoreOpen(false);
     setAccountMenuOpen(true);
   }
 
@@ -1225,6 +1366,9 @@ export default function FlowTrackPage({
       50,
   );
   const isOwner = data.viewer?.role === "owner";
+  const mobileMoreActive = MOBILE_MORE_NAV_ITEMS.some(
+    (item) => item.id === view,
+  );
 
   return (
     <div
@@ -1235,7 +1379,7 @@ export default function FlowTrackPage({
       data-ui-accent={uiPreferences.accent}
       data-ui-motion={uiPreferences.motion}
     >
-      <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
+      <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
             <Target size={22} />
@@ -1244,16 +1388,12 @@ export default function FlowTrackPage({
             <strong>FlowTrack</strong>
             <span>личное пространство</span>
           </div>
-          <button
-            className="icon-button sidebar-close"
-            onClick={() => setMobileOpen(false)}
-            aria-label="Закрыть меню"
-          >
-            <X size={18} />
-          </button>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Разделы приложения">
+        <nav
+          className="sidebar-nav desktop-sidebar-nav"
+          aria-label="Разделы приложения"
+        >
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -1266,6 +1406,37 @@ export default function FlowTrackPage({
               {view === id && <i />}
             </button>
           ))}
+        </nav>
+
+        <nav
+          className="mobile-bottom-nav"
+          aria-label="Основная навигация"
+        >
+          {MOBILE_PRIMARY_NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={view === id ? "nav-item nav-item-active" : "nav-item"}
+              onClick={() => navigate(id)}
+              aria-current={view === id ? "page" : undefined}
+            >
+              <Icon size={19} />
+              <span>{label}</span>
+            </button>
+          ))}
+          <button
+            className={
+              mobileMoreOpen || mobileMoreActive
+                ? "nav-item nav-item-active mobile-more-trigger"
+                : "nav-item mobile-more-trigger"
+            }
+            type="button"
+            onClick={() => setMobileMoreOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={mobileMoreOpen}
+          >
+            <MoreHorizontal size={20} />
+            <span>Ещё</span>
+          </button>
         </nav>
 
         <div className="sidebar-tools">
@@ -1327,33 +1498,33 @@ export default function FlowTrackPage({
         </div>
       </aside>
 
-      {mobileOpen && (
-        <button
-          className="mobile-scrim"
-          aria-label="Закрыть меню"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
       <main className="main-content">
         <div className="mobile-header">
-          <button
-            className="icon-button mobile-data-button"
-            onClick={() => setDataCenterOpen(true)}
-            aria-label="Данные и резервные копии"
-          >
-            <Database size={19} />
-          </button>
-          <strong>FlowTrack</strong>
-          <button
-            className="mobile-account"
-            type="button"
-            onClick={() => openSettings()}
-            title={`${currentUser.displayName} · профиль`}
-            aria-label="Открыть профиль"
-          >
-            <UserRound size={17} />
-          </button>
+          <div className="mobile-brand" aria-label="FlowTrack">
+            <span aria-hidden="true">
+              <Target size={18} />
+            </span>
+            <strong>FlowTrack</strong>
+          </div>
+          <div className="mobile-header-actions">
+            <button
+              className="icon-button mobile-search-button"
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              aria-label="Открыть поиск"
+            >
+              <Search size={19} />
+            </button>
+            <button
+              className="mobile-account"
+              type="button"
+              onClick={() => openSettings()}
+              title={`${currentUser.displayName} · настройки`}
+              aria-label="Открыть профиль и настройки"
+            >
+              <span aria-hidden="true">{accountInitials(currentUser)}</span>
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -1400,6 +1571,8 @@ export default function FlowTrackPage({
                 data={data}
                 onCreate={setEditor}
                 onMutate={mutate}
+                onToggleHabit={setHabitCompletion}
+                savingHabitKeys={savingHabitKeys}
               />
             )}
             {view === "schedule" && (
@@ -1500,6 +1673,119 @@ export default function FlowTrackPage({
             setEditor(next);
           }}
         />
+      )}
+
+      {mobileMoreOpen && (
+        <div
+          className="mobile-more-backdrop"
+          onMouseDown={() => setMobileMoreOpen(false)}
+        >
+          <section
+            className="mobile-more-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-more-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="mobile-more-header">
+              <div className="mobile-more-profile">
+                <div className="account-avatar" aria-hidden="true">
+                  {accountInitials(currentUser)}
+                </div>
+                <span>
+                  <strong id="mobile-more-title">Ещё</strong>
+                  <small>{currentUser.displayName}</small>
+                </span>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setMobileMoreOpen(false)}
+                aria-label="Закрыть дополнительное меню"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="mobile-more-content">
+              <section>
+                <span className="mobile-more-label">Разделы</span>
+                <div className="mobile-more-grid">
+                  {MOBILE_MORE_NAV_ITEMS.map(
+                    ({ id, label, icon: Icon }) => (
+                      <button
+                        key={id}
+                        className={
+                          view === id
+                            ? "mobile-more-view mobile-more-view-active"
+                            : "mobile-more-view"
+                        }
+                        type="button"
+                        onClick={() => navigate(id)}
+                      >
+                        <Icon size={21} />
+                        <span>{label}</span>
+                      </button>
+                    ),
+                  )}
+                </div>
+              </section>
+
+              <section>
+                <span className="mobile-more-label">Управление</span>
+                <div className="mobile-more-actions">
+                  <button
+                    className="mobile-more-quick-action"
+                    type="button"
+                    onClick={() => {
+                      setMobileMoreOpen(false);
+                      setQuickCaptureOpen(true);
+                    }}
+                  >
+                    <Plus size={20} />
+                    <span>
+                      <strong>Быстро добавить</strong>
+                      <small>Создать задачу, заметку или привычку</small>
+                    </span>
+                    <ChevronRight size={18} />
+                  </button>
+                  <button type="button" onClick={() => openSettings()}>
+                    <Settings2 size={20} />
+                    <span>
+                      <strong>Настройки</strong>
+                      <small>Тема, масштаб и поведение</small>
+                    </span>
+                    <ChevronRight size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMoreOpen(false);
+                      setDataCenterOpen(true);
+                    }}
+                  >
+                    <Database size={20} />
+                    <span>
+                      <strong>Данные и резервные копии</strong>
+                      <small>Импорт, экспорт и восстановление</small>
+                    </span>
+                    <ChevronRight size={18} />
+                  </button>
+                  {isOwner && (
+                    <a href="/admin">
+                      <ShieldCheck size={20} />
+                      <span>
+                        <strong>Администрирование</strong>
+                        <small>Пользователи и статистика</small>
+                      </span>
+                      <ChevronRight size={18} />
+                    </a>
+                  )}
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
       )}
 
       {accountMenuOpen && (
@@ -1936,22 +2222,6 @@ export default function FlowTrackPage({
         </div>
       )}
 
-      <div className="mobile-floating-tools">
-        <button
-          onClick={() => setSearchOpen(true)}
-          aria-label="Открыть поиск"
-        >
-          <Search size={19} />
-        </button>
-        <button
-          className="mobile-quick-add"
-          onClick={() => setQuickCaptureOpen(true)}
-          aria-label="Быстро добавить"
-        >
-          <Plus size={22} />
-        </button>
-      </div>
-
       {toast && (
         <div className="toast">
           <CheckCircle2 size={17} />
@@ -2342,6 +2612,8 @@ function Habits({
   data,
   onCreate,
   onMutate,
+  onToggleHabit,
+  savingHabitKeys,
 }: {
   data: AppData;
   onCreate: (editor: EditorState) => void;
@@ -2350,6 +2622,12 @@ function Habits({
     payload: Record<string, unknown>,
     success?: string,
   ) => Promise<boolean>;
+  onToggleHabit: (
+    habitId: number,
+    date: string,
+    completed: boolean,
+  ) => Promise<boolean>;
+  savingHabitKeys: Set<string>;
 }) {
   const [month, setMonth] = useState(() => {
     const value = new Date();
@@ -2396,7 +2674,7 @@ function Habits({
 
       {data.habits.length ? (
         <div className="habit-list">
-          {data.habits.map((habit) => {
+          {data.habits.map((habit, habitIndex) => {
             const monthPrefix = `${year}-${String(monthIndex + 1).padStart(2, "0")}-`;
             const completed = data.habitLogs.filter(
               (log) =>
@@ -2406,12 +2684,18 @@ function Habits({
             ).length;
             const streak = calculateStreak(habit.id, data.habitLogs);
             return (
-              <article className="habit-card" key={habit.id}>
+              <article
+                className="habit-card"
+                key={habit.id}
+                style={
+                  {
+                    "--habit-color": habit.color,
+                    "--habit-index": habitIndex,
+                  } as React.CSSProperties
+                }
+              >
                 <div className="habit-info">
-                  <div
-                    className="habit-symbol"
-                    style={{ "--habit-color": habit.color } as React.CSSProperties}
-                  >
+                  <div className="habit-symbol">
                     {habit.icon === "water"
                       ? "💧"
                       : habit.icon === "book"
@@ -2470,7 +2754,10 @@ function Habits({
                       </button>
                     </div>
                   </div>
-                  <div className="calendar-grid">
+                  <div
+                    className="calendar-grid"
+                    key={`${habit.id}-${monthPrefix}`}
+                  >
                     {WEEKDAYS.map((day) => (
                       <span className="weekday" key={day}>
                         {day}
@@ -2488,27 +2775,30 @@ function Habits({
                           log.completed,
                       );
                       const isToday = key === dateKey(new Date());
+                      const saving = savingHabitKeys.has(
+                        habitLogKey(habit.id, key),
+                      );
                       return (
                         <button
                           key={key}
-                          className={`${done ? "day-done" : ""} ${isToday ? "day-today" : ""}`}
-                          style={
-                            done
-                              ? ({
-                                  "--habit-color": habit.color,
-                                } as React.CSSProperties)
-                              : undefined
-                          }
+                          className={`${done ? "day-done" : ""} ${isToday ? "day-today" : ""} ${saving ? "day-pending" : ""}`}
+                          disabled={saving}
+                          aria-busy={saving}
+                          aria-pressed={done}
                           onClick={() =>
-                            onMutate(
-                              "toggleHabit",
-                              { habitId: habit.id, date: key },
-                              done ? "Отметка снята" : "Привычка выполнена",
-                            )
+                            onToggleHabit(habit.id, key, !done)
                           }
                           aria-label={`${day} число — ${done ? "выполнено" : "не выполнено"}`}
                         >
-                          {day}
+                          <span>{day}</span>
+                          {done && (
+                            <Check
+                              className="day-check"
+                              size={10}
+                              strokeWidth={3}
+                              aria-hidden="true"
+                            />
+                          )}
                         </button>
                       );
                     })}
