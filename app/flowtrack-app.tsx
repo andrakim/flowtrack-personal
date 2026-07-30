@@ -87,6 +87,11 @@ import {
   X,
 } from "lucide-react";
 import { dashboardGreeting } from "./dashboard-greeting";
+import {
+  shiftAnalyticsAnchor,
+  type AnalyticsPeriod,
+  type AnalyticsSnapshot,
+} from "./analytics-model";
 import type { RichTextStats } from "./rich-text-editor";
 import {
   applyUiPreferencesToDocument,
@@ -109,6 +114,7 @@ const RichTextEditor = lazy(() => import("./rich-text-editor"));
 
 type View =
   | "overview"
+  | "analytics"
   | "habits"
   | "schedule"
   | "projects"
@@ -351,6 +357,7 @@ const EMPTY_DATA: AppData = {
 
 const NAV_ITEMS = [
   { id: "overview" as const, label: "Сегодня", icon: LayoutDashboard },
+  { id: "analytics" as const, label: "Аналитика", icon: BarChart3 },
   { id: "habits" as const, label: "Привычки", icon: Target },
   { id: "schedule" as const, label: "Расписание", icon: CalendarDays },
   { id: "projects" as const, label: "Проекты", icon: FolderKanban },
@@ -367,6 +374,7 @@ const MOBILE_PRIMARY_NAV_ITEMS = [
 ];
 
 const MOBILE_MORE_NAV_ITEMS = [
+  { id: "analytics" as const, label: "Аналитика", icon: BarChart3 },
   { id: "timer" as const, label: "Таймер", icon: Timer },
   { id: "notes" as const, label: "Заметки", icon: StickyNote },
   { id: "goals" as const, label: "Цели", icon: Flag },
@@ -1566,6 +1574,7 @@ export default function FlowTrackPage({
                 onMutate={mutate}
               />
             )}
+            {view === "analytics" && <AnalyticsView data={data} />}
             {view === "habits" && (
               <Habits
                 data={data}
@@ -2605,6 +2614,768 @@ function StatCard({
       {note && <small>{note}</small>}
       <ChevronRight className="stat-arrow" size={16} />
     </button>
+  );
+}
+
+type AnalyticsActivityMode = "all" | "tasks" | "focus" | "habits";
+type AnalyticsDailyPoint = AnalyticsSnapshot["daily"][number];
+
+const ANALYTICS_PERIODS: Array<{
+  id: AnalyticsPeriod;
+  label: string;
+}> = [
+  { id: "week", label: "Неделя" },
+  { id: "month", label: "Месяц" },
+  { id: "quarter", label: "Квартал" },
+  { id: "year", label: "Год" },
+];
+
+function formatAnalyticsDate(value: string, withYear = false) {
+  return formatDate(`${value}T12:00:00Z`, {
+    day: "numeric",
+    month: "short",
+    ...(withYear ? { year: "numeric" } : {}),
+    timeZone: "UTC",
+  }).replace(/\./g, "");
+}
+
+function analyticsTaskCount(value: number) {
+  return `${value} ${pluralizeRussian(value, "задача", "задачи", "задач")}`;
+}
+
+function analyticsTaskGenitiveCount(value: number) {
+  return `${value} ${pluralizeRussian(value, "задачи", "задач", "задач")}`;
+}
+
+function analyticsActivityUnit(
+  value: number,
+  mode: AnalyticsActivityMode,
+) {
+  if (mode === "focus") return `${value} мин`;
+  if (mode === "tasks") return analyticsTaskCount(value);
+  if (mode === "habits") {
+    return `${value} ${pluralizeRussian(value, "отметка", "отметки", "отметок")}`;
+  }
+  return `${value} ${pluralizeRussian(
+    value,
+    "балл активности",
+    "балла активности",
+    "баллов активности",
+  )}`;
+}
+
+function analyticsCompletionLabel(value: number) {
+  if (value % 100 !== 11 && value % 10 === 1) {
+    return `${value} задача завершена`;
+  }
+  if (
+    !(value % 100 >= 12 && value % 100 <= 14) &&
+    value % 10 >= 2 &&
+    value % 10 <= 4
+  ) {
+    return `${value} задачи завершены`;
+  }
+  return `${value} задач завершено`;
+}
+
+function formatAnalyticsRange(range: AnalyticsSnapshot["range"]) {
+  const sameYear = range.start.slice(0, 4) === range.effectiveEnd.slice(0, 4);
+  return `${formatAnalyticsDate(range.start, !sameYear)} — ${formatAnalyticsDate(
+    range.effectiveEnd,
+    true,
+  )}`;
+}
+
+function analyticsDeltaLabel(
+  delta: number | null,
+  suffix = "%",
+) {
+  if (delta === null) return "нет базы сравнения";
+  if (delta === 0) return "без изменений";
+  return `${delta > 0 ? "↑" : "↓"} ${Math.abs(delta)}${suffix}`;
+}
+
+function aggregateAnalyticsDaily(
+  daily: AnalyticsDailyPoint[],
+  period: AnalyticsPeriod,
+) {
+  if (period === "week" || period === "month") {
+    return daily.map((point) => ({
+      ...point,
+      label:
+        period === "week"
+          ? formatDate(`${point.date}T12:00:00Z`, {
+              weekday: "short",
+              timeZone: "UTC",
+            }).replace(".", "")
+          : String(Number(point.date.slice(-2))),
+    }));
+  }
+
+  const grouped = new Map<
+    string,
+    AnalyticsDailyPoint & { label: string }
+  >();
+  daily.forEach((point, index) => {
+    const key =
+      period === "year"
+        ? point.date.slice(0, 7)
+        : `week-${Math.floor(index / 7)}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.planned += point.planned;
+      existing.completed += point.completed;
+      existing.focusMinutes += point.focusMinutes;
+      existing.habits += point.habits;
+      return;
+    }
+    grouped.set(key, {
+      ...point,
+      label:
+        period === "year"
+          ? formatDate(`${point.date.slice(0, 7)}-01T12:00:00Z`, {
+              month: "short",
+              timeZone: "UTC",
+            }).replace(".", "")
+          : `${Math.floor(index / 7) + 1}`,
+    });
+  });
+  return [...grouped.values()];
+}
+
+function AnalyticsMetricCard({
+  icon,
+  label,
+  value,
+  note,
+  delta,
+  deltaSuffix = " п.п.",
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  note: string;
+  delta: number | null;
+  deltaSuffix?: string;
+  tone: "violet" | "blue" | "emerald" | "amber";
+}) {
+  return (
+    <article className={`analytics-metric analytics-metric-${tone}`}>
+      <header>
+        <span>{icon}</span>
+        <small
+          className={
+            delta === null || delta === 0
+              ? "analytics-delta"
+              : delta > 0
+                ? "analytics-delta analytics-delta-up"
+                : "analytics-delta analytics-delta-down"
+          }
+        >
+          {analyticsDeltaLabel(delta, deltaSuffix)}
+        </small>
+      </header>
+      <strong>{value}</strong>
+      <span>{label}</span>
+      <p>{note}</p>
+    </article>
+  );
+}
+
+function AnalyticsPlanChart({
+  daily,
+  period,
+}: {
+  daily: AnalyticsDailyPoint[];
+  period: AnalyticsPeriod;
+}) {
+  const points = aggregateAnalyticsDaily(daily, period);
+  const maximum = Math.max(
+    1,
+    ...points.flatMap((point) => [point.planned, point.completed]),
+  );
+
+  return (
+    <div className="analytics-plan-chart">
+      <div className="analytics-chart-legend" aria-hidden="true">
+        <span><i className="analytics-legend-plan" />Запланировано</span>
+        <span><i className="analytics-legend-done" />Выполнено</span>
+      </div>
+      <div
+        className="analytics-bars"
+        role="img"
+        aria-label="Запланированные и выполненные задачи за выбранный период"
+      >
+        {points.map((point) => (
+          <div
+            className="analytics-bar-column"
+            key={point.date}
+            title={`${formatAnalyticsDate(point.date)}: ${point.planned} запланировано, ${point.completed} выполнено`}
+          >
+            <div className="analytics-bar-pair">
+              <i
+                className="analytics-bar-planned"
+                style={{ height: `${(point.planned / maximum) * 100}%` }}
+              />
+              <i
+                className="analytics-bar-completed"
+                style={{ height: `${(point.completed / maximum) * 100}%` }}
+              />
+            </div>
+            <small>{point.label}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function activityValue(
+  point: AnalyticsDailyPoint,
+  mode: AnalyticsActivityMode,
+) {
+  if (mode === "tasks") return point.completed;
+  if (mode === "focus") return point.focusMinutes;
+  if (mode === "habits") return point.habits;
+  return point.completed * 2 + point.habits + Math.round(point.focusMinutes / 25);
+}
+
+function AnalyticsHeatmap({
+  daily,
+  mode,
+  onModeChange,
+}: {
+  daily: AnalyticsDailyPoint[];
+  mode: AnalyticsActivityMode;
+  onModeChange: (mode: AnalyticsActivityMode) => void;
+}) {
+  const values = daily.map((point) => activityValue(point, mode));
+  const maximum = Math.max(1, ...values);
+  const firstOffset = daily.length
+    ? (new Date(`${daily[0].date}T12:00:00Z`).getUTCDay() + 6) % 7
+    : 0;
+  const modeLabel = {
+    all: "общая активность",
+    tasks: "выполненные задачи",
+    focus: "минуты фокуса",
+    habits: "отметки привычек",
+  }[mode];
+
+  return (
+    <>
+      <div className="analytics-heatmap-toolbar">
+        <div className="segmented analytics-activity-switch">
+          {(
+            [
+              ["all", "Всё"],
+              ["tasks", "Задачи"],
+              ["focus", "Фокус"],
+              ["habits", "Привычки"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              className={mode === id ? "active" : ""}
+              key={id}
+              type="button"
+              onClick={() => onModeChange(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="analytics-heatmap-scale" aria-hidden="true">
+          <span>Меньше</span>
+          {[0, 1, 2, 3, 4].map((level) => (
+            <i data-level={level} key={level} />
+          ))}
+          <span>Больше</span>
+        </div>
+      </div>
+      <div className="analytics-heatmap-scroll">
+        <div
+          className={
+            daily.length <= 31
+              ? "analytics-heatmap-grid analytics-heatmap-grid-short"
+              : "analytics-heatmap-grid"
+          }
+          role="img"
+          aria-label={`Календарь активности: ${modeLabel}`}
+        >
+          {Array.from({ length: firstOffset }, (_, index) => (
+            <i className="analytics-heatmap-empty" key={`empty-${index}`} />
+          ))}
+          {daily.map((point) => {
+            const value = activityValue(point, mode);
+            const level = value ? Math.max(1, Math.ceil((value / maximum) * 4)) : 0;
+            const unit = analyticsActivityUnit(value, mode);
+            return (
+              <i
+                data-level={level}
+                key={point.date}
+                title={`${formatAnalyticsDate(point.date)} · ${unit}`}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function AnalyticsProjectBreakdown({
+  projects,
+}: {
+  projects: AnalyticsSnapshot["projects"];
+}) {
+  const maximum = Math.max(
+    1,
+    ...projects.map((project) =>
+      project.focusSeconds
+        ? project.focusSeconds
+        : project.completed * 60,
+    ),
+  );
+
+  if (!projects.length) {
+    return (
+      <div className="small-empty analytics-small-empty">
+        <FolderKanban size={28} />
+        <span>За этот период активности по проектам пока нет</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="analytics-project-list">
+      {projects.map((project) => {
+        const weight = project.focusSeconds || project.completed * 60;
+        return (
+          <div className="analytics-project-row" key={project.id ?? "none"}>
+            <div className="analytics-project-heading">
+              <span>
+                <i style={{ background: project.color }} />
+                <strong>{project.title}</strong>
+              </span>
+              <small>
+                {formatDuration(project.focusSeconds)} ·{" "}
+                {analyticsTaskCount(project.completed)}
+              </small>
+            </div>
+            <div className="analytics-project-track">
+              <i
+                style={{
+                  width: `${Math.max(4, (weight / maximum) * 100)}%`,
+                  background: project.color,
+                }}
+              />
+            </div>
+            <div className="analytics-project-meta">
+              <span>{project.planned} в плане</span>
+              {project.overdue > 0 && <span>{project.overdue} не завершено</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AnalyticsNarrative({
+  snapshot,
+}: {
+  snapshot: AnalyticsSnapshot;
+}) {
+  const plan = snapshot.metrics.planCompletion;
+  const focus = snapshot.metrics.focus;
+  const planText = plan.denominator
+    ? `Выполнено ${plan.numerator} из ${plan.denominator} запланированных задач — ${plan.value}%.`
+    : "В выбранном периоде нет задач с установленным сроком.";
+  const focusText =
+    focus.delta === null
+      ? `Фокус-время — ${formatDuration(focus.value)}; сравнение появится после следующего периода.`
+      : `Фокус-время — ${formatDuration(focus.value)}, ${focus.delta === 0 ? "без изменений" : `${focus.delta > 0 ? "выше" : "ниже"} прошлого периода на ${Math.abs(focus.delta)}%`}.`;
+  const bestDayText = snapshot.bestDay
+    ? `Самый насыщенный день — ${formatAnalyticsDate(snapshot.bestDay)}.`
+    : "Данных для определения самого активного дня пока недостаточно.";
+  const attention: string[] = [];
+  if (snapshot.metrics.overdueTasks) {
+    const value = snapshot.metrics.overdueTasks;
+    attention.push(
+      value % 100 !== 11 && value % 10 === 1
+        ? `${value} задача из плана не завершена`
+        : `${analyticsTaskCount(value)} из плана не завершены`,
+    );
+  }
+  if (snapshot.metrics.rescheduledTasks) {
+    const value = snapshot.metrics.rescheduledTasks;
+    attention.push(
+      `${value} ${pluralizeRussian(
+        value,
+        "перенос срока",
+        "переноса сроков",
+        "переносов сроков",
+      )}`,
+    );
+  }
+  const nextFocus = attention.length
+    ? `${attention.join("; ")}. Начните с незавершённых задач высокого приоритета.`
+    : "Критичных сигналов за период нет. Сохраняйте текущий ритм и не перегружайте следующий план.";
+
+  return (
+    <div className="analytics-narrative-grid">
+      <article>
+        <span><CheckCircle2 size={17} />Результат</span>
+        <p>{planText} {focusText}</p>
+      </article>
+      <article>
+        <span><TrendingUp size={17} />Ритм</span>
+        <p>{bestDayText} Регулярность привычек — {snapshot.metrics.habits.denominator ? `${snapshot.metrics.habits.value}%` : "пока без базы"}.</p>
+      </article>
+      <article>
+        <span><Target size={17} />Следующий фокус</span>
+        <p>{nextFocus}</p>
+      </article>
+    </div>
+  );
+}
+
+function AnalyticsLoading() {
+  return (
+    <div className="analytics-loading" aria-label="Загрузка аналитики">
+      {Array.from({ length: 4 }, (_, index) => (
+        <i key={index} />
+      ))}
+    </div>
+  );
+}
+
+function AnalyticsView({ data }: { data: AppData }) {
+  const today = dateKey(new Date());
+  const [period, setPeriod] = useState<AnalyticsPeriod>("week");
+  const [anchor, setAnchor] = useState(today);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [activityMode, setActivityMode] =
+    useState<AnalyticsActivityMode>("all");
+  const [snapshot, setSnapshot] = useState<AnalyticsSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      period,
+      anchor,
+      today,
+      timezoneOffset: String(new Date().getTimezoneOffset()),
+    });
+    if (projectId !== null) params.set("projectId", String(projectId));
+    fetchDataRequest(`/api/analytics?${params}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (redirectIfUnauthorized(response)) {
+          throw new Error("Сессия завершена");
+        }
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Не удалось загрузить аналитику");
+        }
+        return payload as AnalyticsSnapshot;
+      })
+      .then((payload) => setSnapshot(payload))
+      .catch((loadError: unknown) => {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") {
+          return;
+        }
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Не удалось загрузить аналитику",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [anchor, period, projectId, retryToken, today]);
+
+  const canMoveForward = Boolean(
+    snapshot && snapshot.range.end < today,
+  );
+  const refreshAnalytics = () => {
+    setLoading(true);
+    setError(null);
+    setRetryToken((value) => value + 1);
+  };
+
+  return (
+    <div className="page-stack analytics-page">
+      <PageHeader
+        eyebrow="Результаты"
+        title="Аналитика"
+        subtitle="Не абстрактный балл продуктивности, а план, сроки, фокус и регулярность."
+        action={
+          <span className="analytics-live-badge">
+            <i />
+            Данные обновляются автоматически
+          </span>
+        }
+      />
+
+      <section className="analytics-toolbar">
+        <div className="segmented analytics-period-switch">
+          {ANALYTICS_PERIODS.map((option) => (
+            <button
+              className={period === option.id ? "active" : ""}
+              key={option.id}
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                setError(null);
+                setPeriod(option.id);
+                setAnchor(today);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="analytics-range-control">
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setAnchor((current) =>
+                shiftAnalyticsAnchor(period, current, -1),
+              );
+            }}
+            aria-label="Предыдущий период"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <strong>
+            {snapshot ? formatAnalyticsRange(snapshot.range) : "Загружаю период"}
+          </strong>
+          <button
+            className="icon-button"
+            type="button"
+            disabled={!canMoveForward}
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setAnchor((current) =>
+                shiftAnalyticsAnchor(period, current, 1),
+              );
+            }}
+            aria-label="Следующий период"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+        <label className="analytics-project-filter">
+          <span>Проект</span>
+          <select
+            value={projectId ?? ""}
+            onChange={(event) => {
+              setLoading(true);
+              setError(null);
+              setProjectId(
+                event.target.value ? Number(event.target.value) : null,
+              );
+            }}
+          >
+            <option value="">Все проекты</option>
+            {data.projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      {loading && !snapshot ? (
+        <AnalyticsLoading />
+      ) : error && !snapshot ? (
+        <div className="analytics-error panel">
+          <CloudOff size={31} />
+          <strong>Аналитика временно недоступна</strong>
+          <span>{error}</span>
+          <button type="button" onClick={refreshAnalytics}>
+            Повторить
+          </button>
+        </div>
+      ) : snapshot ? (
+        <>
+          {error && (
+            <div className="analytics-stale-note">
+              Показаны последние загруженные данные. {error}
+              <button type="button" onClick={refreshAnalytics}>
+                Обновить
+              </button>
+            </div>
+          )}
+
+          <section className="analytics-metrics-grid" aria-label="Ключевые показатели">
+            <AnalyticsMetricCard
+              icon={<CheckCircle2 size={20} />}
+              label="Выполнение плана"
+              value={
+                snapshot.metrics.planCompletion.denominator
+                  ? `${snapshot.metrics.planCompletion.value}%`
+                  : "—"
+              }
+              note={
+                snapshot.metrics.planCompletion.denominator
+                  ? `${snapshot.metrics.planCompletion.numerator} из ${analyticsTaskGenitiveCount(snapshot.metrics.planCompletion.denominator)}`
+                  : "Добавьте задачам сроки"
+              }
+              delta={snapshot.metrics.planCompletion.delta}
+              tone="violet"
+            />
+            <AnalyticsMetricCard
+              icon={<CalendarDays size={20} />}
+              label="Выполнено в срок"
+              value={
+                snapshot.metrics.onTime.denominator
+                  ? `${snapshot.metrics.onTime.value}%`
+                  : "—"
+              }
+              note={
+                snapshot.metrics.onTime.denominator
+                  ? `${snapshot.metrics.onTime.numerator} из ${analyticsTaskGenitiveCount(snapshot.metrics.onTime.denominator)} со сроком`
+                  : "Нет завершённых задач со сроком"
+              }
+              delta={snapshot.metrics.onTime.delta}
+              tone="blue"
+            />
+            <AnalyticsMetricCard
+              icon={<Clock3 size={20} />}
+              label="Фокус-время"
+              value={formatDuration(snapshot.metrics.focus.value)}
+              note={analyticsCompletionLabel(snapshot.metrics.completedTasks)}
+              delta={snapshot.metrics.focus.delta}
+              deltaSuffix="%"
+              tone="emerald"
+            />
+            <AnalyticsMetricCard
+              icon={<Target size={20} />}
+              label="Регулярность привычек"
+              value={
+                snapshot.metrics.habits.denominator
+                  ? `${snapshot.metrics.habits.value}%`
+                  : "—"
+              }
+              note={
+                snapshot.metrics.habits.denominator
+                  ? `${snapshot.metrics.habits.numerator} из ${snapshot.metrics.habits.denominator} ${pluralizeRussian(
+                      snapshot.metrics.habits.denominator,
+                      "выполнения",
+                      "выполнений",
+                      "выполнений",
+                    )}`
+                  : "Пока нет ожидаемых выполнений"
+              }
+              delta={snapshot.metrics.habits.delta}
+              tone="amber"
+            />
+          </section>
+
+          <section className="analytics-summary-strip">
+            <div>
+              <span>Завершено</span>
+              <strong>{snapshot.metrics.completedTasks}</strong>
+            </div>
+            <div>
+              <span>Не завершено из плана</span>
+              <strong>{snapshot.metrics.overdueTasks}</strong>
+            </div>
+            <div>
+              <span>Переносы сроков</span>
+              <strong>{snapshot.metrics.rescheduledTasks}</strong>
+            </div>
+            <div>
+              <span>Лучший день</span>
+              <strong>
+                {snapshot.bestDay
+                  ? formatAnalyticsDate(snapshot.bestDay)
+                  : "Пока нет"}
+              </strong>
+            </div>
+          </section>
+
+          <section className="analytics-primary-grid">
+            <div className="panel analytics-plan-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="panel-kicker">План и факт</span>
+                  <h2><BarChart3 size={19} />Задачи по периоду</h2>
+                </div>
+                <span className="soft-badge">
+                  {snapshot.metrics.planCompletion.numerator}/{snapshot.metrics.planCompletion.denominator}
+                </span>
+              </div>
+              <AnalyticsPlanChart daily={snapshot.daily} period={period} />
+            </div>
+
+            <div className="panel analytics-projects-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="panel-kicker">Распределение</span>
+                  <h2><FolderKanban size={19} />Результаты по проектам</h2>
+                </div>
+              </div>
+              <AnalyticsProjectBreakdown projects={snapshot.projects} />
+            </div>
+          </section>
+
+          <section className="panel analytics-heatmap-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="panel-kicker">Календарь активности</span>
+                <h2><Calendar size={19} />Ритм без пропусков</h2>
+              </div>
+              {snapshot.habitsAreGlobal && (
+                <span className="soft-badge">Привычки — по всем проектам</span>
+              )}
+            </div>
+            <AnalyticsHeatmap
+              daily={snapshot.daily}
+              mode={activityMode}
+              onModeChange={setActivityMode}
+            />
+          </section>
+
+          <section className="panel analytics-report-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="panel-kicker">Автоматический итог</span>
+                <h2><TrendingUp size={19} />Что говорит период</h2>
+              </div>
+              <span className="soft-badge">По точным правилам</span>
+            </div>
+            <AnalyticsNarrative snapshot={snapshot} />
+            {snapshot.trackingStartedAt && (
+              <p className="analytics-coverage-note">
+                <Database size={15} />
+                Завершения, привычки и фокус восстановлены из имеющейся истории.
+                Переносы и возвраты задач точно фиксируются с{" "}
+                {formatDate(new Date(snapshot.trackingStartedAt), {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }).replace(/\.$/, "")}.
+              </p>
+            )}
+          </section>
+        </>
+      ) : null}
+    </div>
   );
 }
 

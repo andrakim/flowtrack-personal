@@ -366,3 +366,63 @@ export const importRecords = sqliteTable(
     index("import_records_entity_idx").on(table.entityType, table.recordId),
   ],
 );
+
+export const analyticsTracking = sqliteTable("analytics_tracking", {
+  userId: integer("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  startedAt: integer("started_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
+export const analyticsEvents = sqliteTable(
+  "analytics_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    entityType: text("entity_type", {
+      enum: ["task", "habit", "focus", "project"],
+    }).notNull(),
+    entityId: integer("entity_id").notNull(),
+    eventType: text("event_type", {
+      enum: [
+        "task_created",
+        "task_completed",
+        "task_reopened",
+        "task_rescheduled",
+        "task_deleted",
+        "task_restored",
+        "habit_created",
+        "habit_completed",
+        "habit_uncompleted",
+        "focus_completed",
+      ],
+    }).notNull(),
+    effectiveDate: text("effective_date"),
+    projectId: integer("project_id"),
+    durationSeconds: integer("duration_seconds"),
+    previousValue: text("previous_value"),
+    nextValue: text("next_value"),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("analytics_events_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    index("analytics_events_user_type_created_idx").on(
+      table.userId,
+      table.eventType,
+      table.createdAt,
+    ),
+    index("analytics_events_entity_idx").on(
+      table.entityType,
+      table.entityId,
+      table.createdAt,
+    ),
+    index("analytics_events_effective_date_idx").on(table.effectiveDate),
+  ],
+);

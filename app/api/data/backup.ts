@@ -2,6 +2,8 @@ import { desc, eq, inArray } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import type { getDb } from "@/db";
 import {
+  analyticsEvents,
+  analyticsTracking,
   goals,
   habitLogs,
   habits,
@@ -951,6 +953,13 @@ export async function restoreBackup(
   const ownedColumnIds = ownedColumnRows.map((row) => row.id);
 
   const statements: BatchItem<"sqlite">[] = [
+    db
+      .delete(analyticsEvents)
+      .where(eq(analyticsEvents.userId, userId)),
+    db
+      .update(analyticsTracking)
+      .set({ startedAt: new Date() })
+      .where(eq(analyticsTracking.userId, userId)),
     db
       .delete(pomodoroState)
       .where(eq(pomodoroState.userId, userId)),
