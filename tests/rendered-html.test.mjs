@@ -60,5 +60,5 @@ test("renders the personal workspace for an authenticated user", async () => {
   assert.match(html, /FlowTrack/);
   assert.match(html, /andrey@example\.com/);
   assert.match(html, /\/signout-with-chatgpt\?return_to=%2F/);
-  assert.match(html, /aria-label="Открыть профиль"/);
+  assert.match(html, /aria-label="Открыть профиль и настройки"/);
 });
