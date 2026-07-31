@@ -258,6 +258,38 @@ function eventTime(event: AnalyticsEventRow) {
   return timestamp(event.createdAt) ?? 0;
 }
 
+function currentAnalyticsInput(input: AnalyticsInput): AnalyticsInput {
+  const projects = input.projects.filter(
+    (project) => timestamp(project.deletedAt) === null,
+  );
+  const projectIds = new Set(projects.map((project) => project.id));
+  const tasks = input.tasks.filter(
+    (task) =>
+      timestamp(task.deletedAt) === null &&
+      (task.projectId === null || projectIds.has(task.projectId)),
+  );
+  const habits = input.habits.filter(
+    (habit) => timestamp(habit.deletedAt) === null,
+  );
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const habitIds = new Set(habits.map((habit) => habit.id));
+  const focusIds = new Set(input.timeEntries.map((entry) => entry.id));
+
+  return {
+    ...input,
+    tasks,
+    habits,
+    habitLogs: input.habitLogs.filter((log) => habitIds.has(log.habitId)),
+    projects,
+    events: input.events.filter((event) => {
+      if (event.entityType === "task") return taskIds.has(event.entityId);
+      if (event.entityType === "habit") return habitIds.has(event.entityId);
+      if (event.entityType === "focus") return focusIds.has(event.entityId);
+      return projectIds.has(event.entityId);
+    }),
+  };
+}
+
 function taskUniverse(
   tasks: AnalyticsTaskRow[],
   events: AnalyticsEventRow[],
@@ -657,15 +689,26 @@ function valueDelta(current: number, previous: number) {
 }
 
 export function buildAnalyticsSnapshot(input: AnalyticsInput) {
+  const currentInput = currentAnalyticsInput(input);
   const ranges = resolveAnalyticsPeriod(
-    input.period,
-    input.anchor,
-    input.today ?? input.anchor,
+    currentInput.period,
+    currentInput.anchor,
+    currentInput.today ?? currentInput.anchor,
   );
-  const tasks = taskUniverse(input.tasks, input.events);
-  const eventsByTask = taskEventsById(input.events);
-  const current = computeWindow(input, ranges.current, tasks, eventsByTask);
-  const previous = computeWindow(input, ranges.previous, tasks, eventsByTask);
+  const tasks = taskUniverse(currentInput.tasks, currentInput.events);
+  const eventsByTask = taskEventsById(currentInput.events);
+  const current = computeWindow(
+    currentInput,
+    ranges.current,
+    tasks,
+    eventsByTask,
+  );
+  const previous = computeWindow(
+    currentInput,
+    ranges.previous,
+    tasks,
+    eventsByTask,
+  );
   const bestDay = [...current.daily].sort(
     (left, right) =>
       right.completed * 4 +
@@ -677,12 +720,12 @@ export function buildAnalyticsSnapshot(input: AnalyticsInput) {
   )[0];
 
   return {
-    period: input.period,
+    period: currentInput.period,
     range: ranges.current,
     previousRange: ranges.previous,
-    projectId: input.projectId,
-    habitsAreGlobal: input.projectId !== null,
-    trackingStartedAt: timestamp(input.trackingStartedAt),
+    projectId: currentInput.projectId,
+    habitsAreGlobal: currentInput.projectId !== null,
+    trackingStartedAt: timestamp(currentInput.trackingStartedAt),
     metrics: {
       planCompletion: {
         value: current.planCompletion,
