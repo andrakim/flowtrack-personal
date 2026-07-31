@@ -4,7 +4,7 @@ import test from "node:test";
 const developmentPreviewMeta =
   /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
 
-async function renderPage(headers = {}) {
+async function renderPage(headers = {}, pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set(
     "test",
@@ -13,7 +13,7 @@ async function renderPage(headers = {}) {
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${pathname}`, {
       headers: { accept: "text/html", ...headers },
     }),
     {
@@ -61,4 +61,20 @@ test("renders the personal workspace for an authenticated user", async () => {
   assert.match(html, /andrey@example\.com/);
   assert.match(html, /\/signout-with-chatgpt\?return_to=%2F/);
   assert.match(html, /aria-label="Открыть профиль и настройки"/);
+});
+
+test("renders Team Workspace only for an authenticated user", async () => {
+  const response = await renderPage(
+    {
+      "oai-authenticated-user-email": "team@example.com",
+      "oai-authenticated-user-full-name": encodeURIComponent("Участник Команды"),
+      "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+    },
+    "/team",
+  );
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /Открываем Team Workspace/);
+  assert.match(html, /Подключаем общие проекты и участников/);
 });

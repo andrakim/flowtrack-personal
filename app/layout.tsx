@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FlowTrack — личная продуктивность",
+  title: "FlowTrack — личные и командные проекты",
   description:
-    "Привычки, задачи, проекты, заметки, цели и учёт времени в одном личном пространстве.",
+    "Личные привычки, задачи и цели вместе с Team Workspace для семьи, команды и рабочих проектов.",
   other: {
     "codex-preview": "development",
   },

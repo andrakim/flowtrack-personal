@@ -27,6 +27,8 @@ test("keeps settings, data and secondary sections reachable on mobile", async ()
   assert.match(source, /<strong>Быстро добавить<\/strong>/);
   assert.match(source, /<strong>Настройки<\/strong>/);
   assert.match(source, /<strong>Данные и резервные копии<\/strong>/);
+  assert.match(source, /<strong>Team Workspace<\/strong>/);
+  assert.match(source, /href="\/team"/);
   assert.match(source, /aria-label="Открыть профиль и настройки"/);
   assert.match(source, /className="mobile-header-actions"/);
 });

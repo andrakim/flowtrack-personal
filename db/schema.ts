@@ -32,12 +32,136 @@ export const users = sqliteTable(
   ],
 );
 
+export const workspaces = sqliteTable(
+  "workspaces",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    description: text("description"),
+    kind: text("kind", { enum: ["family", "team", "work", "other"] })
+      .notNull()
+      .default("team"),
+    color: text("color").notNull().default("#6366f1"),
+    ownerUserId: integer("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("workspaces_owner_created_idx").on(
+      table.ownerUserId,
+      table.createdAt,
+    ),
+    index("workspaces_archived_updated_idx").on(
+      table.archived,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const workspaceMembers = sqliteTable(
+  "workspace_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["owner", "admin", "member", "viewer"] })
+      .notNull()
+      .default("member"),
+    joinedAt: integer("joined_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    uniqueIndex("workspace_members_workspace_user_unique").on(
+      table.workspaceId,
+      table.userId,
+    ),
+    index("workspace_members_user_workspace_idx").on(
+      table.userId,
+      table.workspaceId,
+    ),
+  ],
+);
+
+export const workspaceInvites = sqliteTable(
+  "workspace_invites",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role", { enum: ["admin", "member", "viewer"] })
+      .notNull()
+      .default("member"),
+    token: text("token").notNull(),
+    status: text("status", {
+      enum: ["pending", "accepted", "declined", "revoked"],
+    })
+      .notNull()
+      .default("pending"),
+    invitedByUserId: integer("invited_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: createdAt(),
+    respondedAt: integer("responded_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    uniqueIndex("workspace_invites_workspace_email_unique").on(
+      table.workspaceId,
+      table.email,
+    ),
+    uniqueIndex("workspace_invites_token_unique").on(table.token),
+    index("workspace_invites_email_status_idx").on(table.email, table.status),
+  ],
+);
+
+export const workspaceActivity = sqliteTable(
+  "workspace_activity",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    actorUserId: integer("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    action: text("action").notNull(),
+    entityType: text("entity_type"),
+    entityId: integer("entity_id"),
+    summary: text("summary").notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("workspace_activity_workspace_created_idx").on(
+      table.workspaceId,
+      table.createdAt,
+    ),
+  ],
+);
+
 export const projects = sqliteTable(
   "projects",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     userId: integer("user_id").references(() => users.id, {
       onDelete: "cascade",
+    }),
+    workspaceId: integer("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
+    createdByUserId: integer("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
     }),
     title: text("title").notNull(),
     description: text("description"),
@@ -51,6 +175,10 @@ export const projects = sqliteTable(
   },
   (table) => [
     index("projects_user_created_idx").on(table.userId, table.createdAt),
+    index("projects_workspace_created_idx").on(
+      table.workspaceId,
+      table.createdAt,
+    ),
     index("projects_archived_created_idx").on(table.archived, table.createdAt),
   ],
 );
@@ -107,6 +235,15 @@ export const tasks = sqliteTable(
     userId: integer("user_id").references(() => users.id, {
       onDelete: "cascade",
     }),
+    workspaceId: integer("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
+    createdByUserId: integer("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    assigneeUserId: integer("assignee_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     title: text("title").notNull(),
     description: text("description"),
     status: text("status", { enum: ["todo", "doing", "done"] })
@@ -146,6 +283,11 @@ export const tasks = sqliteTable(
   },
   (table) => [
     index("tasks_user_due_idx").on(table.userId, table.dueDate),
+    index("tasks_workspace_due_idx").on(table.workspaceId, table.dueDate),
+    index("tasks_assignee_status_idx").on(
+      table.assigneeUserId,
+      table.status,
+    ),
     index("tasks_due_status_idx").on(table.dueDate, table.status),
     index("tasks_project_idx").on(table.projectId),
     index("tasks_kanban_column_order_idx").on(

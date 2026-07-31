@@ -33,6 +33,15 @@ test("habit calendar has theme-safe surfaces and motion feedback", async () => {
   const styles = await readFile(stylesUrl, "utf8");
 
   assert.match(styles, /\.habit-card[\s\S]*background:\s*var\(--surface-1\)/);
+  assert.match(
+    styles,
+    /data-flowtrack-theme="dark"[\s\S]*--accent-strong:\s*color-mix\(in srgb, var\(--accent\) 72%, #ffffff\)/,
+  );
+  assert.match(styles, /--calendar-day-bg:\s*var\(--surface-2\)/);
+  assert.match(
+    styles,
+    /\.calendar-grid > button:not\(\.day-done\)[\s\S]*background:\s*var\(--calendar-day-bg\)/,
+  );
   assert.match(styles, /\.day-pending/);
   assert.match(styles, /@keyframes habit-day-feedback/);
   assert.match(styles, /@keyframes calendar-month-in/);

@@ -38,6 +38,14 @@ test("supports light, dark and system themes with five accents", async () => {
 
   assert.match(styles, /data-flowtrack-theme="dark"/);
   assert.match(styles, /prefers-color-scheme:\s*dark/);
+  assert.match(styles, /--sidebar-bg:\s*linear-gradient/);
+  assert.match(styles, /--sidebar-text:\s*#172033/);
+  assert.match(
+    styles,
+    /data-flowtrack-theme="dark"[\s\S]*?--sidebar-text:\s*#f8fafc/,
+  );
+  assert.match(styles, /background:\s*var\(--sidebar-bg\)/);
+  assert.match(styles, /color:\s*var\(--sidebar-text\)/);
   for (const accent of ["blue", "emerald", "orange", "graphite"]) {
     assert.match(
       styles,
@@ -56,6 +64,23 @@ test("supports compact and automatic sidebars plus reduced motion", async () => 
   assert.match(styles, /--ft-sidebar-width:\s*88px/);
   assert.match(styles, /data-flowtrack-motion="reduced"/);
   assert.match(styles, /prefers-reduced-motion:\s*reduce/);
+});
+
+test("keeps every desktop sidebar action reachable in a short browser window", async () => {
+  const styles = await readFile(stylesUrl, "utf8");
+
+  assert.match(
+    styles,
+    /\.sidebar\s*\{[\s\S]*?height:\s*100dvh;[\s\S]*?overflow:\s*hidden;/,
+  );
+  assert.match(
+    styles,
+    /\.desktop-sidebar-nav\s*\{[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    styles,
+    /@media \(min-width:\s*781px\) and \(max-height:\s*960px\)/,
+  );
 });
 
 test("remembers the last section only when requested", async () => {

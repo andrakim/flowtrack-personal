@@ -24,7 +24,6 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  type Modifier,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -68,6 +67,7 @@ import {
   Pin,
   Play,
   Plus,
+  Printer,
   Repeat2,
   RotateCcw,
   Search,
@@ -84,9 +84,11 @@ import {
   Undo2,
   Upload,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import { dashboardGreeting } from "./dashboard-greeting";
+import { reorderCardsWithinColumn } from "./kanban-order.mjs";
 import {
   shiftAnalyticsAnchor,
   type AnalyticsPeriod,
@@ -116,6 +118,7 @@ type View =
   | "overview"
   | "analytics"
   | "habits"
+  | "print"
   | "schedule"
   | "projects"
   | "timer"
@@ -359,6 +362,7 @@ const NAV_ITEMS = [
   { id: "overview" as const, label: "Сегодня", icon: LayoutDashboard },
   { id: "analytics" as const, label: "Аналитика", icon: BarChart3 },
   { id: "habits" as const, label: "Привычки", icon: Target },
+  { id: "print" as const, label: "Печать", icon: Printer },
   { id: "schedule" as const, label: "Расписание", icon: CalendarDays },
   { id: "projects" as const, label: "Проекты", icon: FolderKanban },
   { id: "timer" as const, label: "Таймер", icon: Timer },
@@ -375,6 +379,7 @@ const MOBILE_PRIMARY_NAV_ITEMS = [
 
 const MOBILE_MORE_NAV_ITEMS = [
   { id: "analytics" as const, label: "Аналитика", icon: BarChart3 },
+  { id: "print" as const, label: "Печать", icon: Printer },
   { id: "timer" as const, label: "Таймер", icon: Timer },
   { id: "notes" as const, label: "Заметки", icon: StickyNote },
   { id: "goals" as const, label: "Цели", icon: Flag },
@@ -445,6 +450,27 @@ const PRIORITY_LABELS = {
   medium: "Средний",
   high: "Высокий",
 };
+type PrintTemplate = "week" | "month" | "day";
+const PRINT_TEMPLATE_OPTIONS = [
+  {
+    id: "week" as const,
+    label: "Неделя",
+    description: "Привычки, цель и место для итогов",
+    icon: CalendarDays,
+  },
+  {
+    id: "month" as const,
+    label: "Месяц",
+    description: "Один лист с отметками на каждый день",
+    icon: Calendar,
+  },
+  {
+    id: "day" as const,
+    label: "День",
+    description: "Задачи, фокус, привычки и заметки",
+    icon: StickyNote,
+  },
+] as const;
 const subscribeToNothing = () => () => undefined;
 const getClientSnapshot = () => true;
 const getServerSnapshot = () => false;
@@ -498,43 +524,43 @@ async function fetchDataRequest(
   }
 }
 
-const alignDragOverlayWithCursor: Modifier = ({
-  activatorEvent,
-  draggingNodeRect,
-  overlayNodeRect,
-  transform,
-}) => {
-  if (!activatorEvent || !draggingNodeRect) return transform;
-  const pointer =
-    "touches" in activatorEvent &&
-    (activatorEvent as TouchEvent).touches.length > 0
-      ? (activatorEvent as TouchEvent).touches[0]
-      : "clientX" in activatorEvent
-        ? (activatorEvent as MouseEvent)
-        : null;
-  if (!pointer) return transform;
-  const overlayWidth = overlayNodeRect?.width ?? draggingNodeRect.width;
-  const overlayHeight = overlayNodeRect?.height ?? draggingNodeRect.height;
-  return {
-    ...transform,
-    x:
-      transform.x +
-      pointer.clientX -
-      draggingNodeRect.left -
-      overlayWidth / 2,
-    y:
-      transform.y +
-      pointer.clientY -
-      draggingNodeRect.top -
-      overlayHeight / 2,
-  };
-};
-
 function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function dateFromKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+function startOfWeek(date: Date) {
+  const start = new Date(date);
+  start.setHours(12, 0, 0, 0);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  return start;
+}
+
+function addCalendarDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function habitFrequencyLabel(habit: Habit) {
+  if (habit.frequency === "daily") return "Каждый день";
+  if (habit.frequency === "weekdays") return "По будням";
+  return "Раз в неделю";
+}
+
+function habitEmoji(habit: Habit) {
+  if (habit.icon === "water") return "💧";
+  if (habit.icon === "book") return "📖";
+  if (habit.icon === "sport") return "💪";
+  if (habit.icon === "sleep") return "🌙";
+  return "✨";
 }
 
 function formatDate(value: string | Date, options?: Intl.DateTimeFormatOptions) {
@@ -1480,6 +1506,10 @@ export default function FlowTrackPage({
             <Database size={17} />
             <span>Данные и резервные копии</span>
           </button>
+          <a className="team-workspace-shortcut" href="/team">
+            <Users size={17} />
+            <span>Team Workspace</span>
+          </a>
           {isOwner && (
             <a className="admin-shortcut" href="/admin">
               <ShieldCheck size={17} />
@@ -1580,6 +1610,13 @@ export default function FlowTrackPage({
                 data={data}
                 onCreate={setEditor}
                 onMutate={mutate}
+                onToggleHabit={setHabitCompletion}
+                savingHabitKeys={savingHabitKeys}
+              />
+            )}
+            {view === "print" && (
+              <PrintTemplates
+                data={data}
                 onToggleHabit={setHabitCompletion}
                 savingHabitKeys={savingHabitKeys}
               />
@@ -1780,6 +1817,14 @@ export default function FlowTrackPage({
                     </span>
                     <ChevronRight size={18} />
                   </button>
+                  <a href="/team">
+                    <Users size={20} />
+                    <span>
+                      <strong>Team Workspace</strong>
+                      <small>Общие проекты семьи или команды</small>
+                    </span>
+                    <ChevronRight size={18} />
+                  </a>
                   {isOwner && (
                     <a href="/admin">
                       <ShieldCheck size={20} />
@@ -3626,6 +3671,468 @@ function Habits({
   );
 }
 
+function PrintTemplates({
+  data,
+  onToggleHabit,
+  savingHabitKeys,
+}: {
+  data: AppData;
+  onToggleHabit: (
+    habitId: number,
+    date: string,
+    completed: boolean,
+  ) => Promise<boolean>;
+  savingHabitKeys: Set<string>;
+}) {
+  const [template, setTemplate] = useState<PrintTemplate>("week");
+  const [anchor, setAnchor] = useState(() => dateKey(new Date()));
+  const selectedDate = dateFromKey(anchor);
+  const weekStart = startOfWeek(selectedDate);
+  const weekDates = Array.from({ length: 7 }, (_, index) =>
+    addCalendarDays(weekStart, index),
+  );
+  const monthStart = new Date(
+    selectedDate.getFullYear(),
+    selectedDate.getMonth(),
+    1,
+    12,
+  );
+  const monthDates = Array.from(
+    {
+      length: new Date(
+        monthStart.getFullYear(),
+        monthStart.getMonth() + 1,
+        0,
+      ).getDate(),
+    },
+    (_, index) => addCalendarDays(monthStart, index),
+  );
+  const printableHabits: Array<Habit | null> = data.habits.length
+    ? data.habits
+    : Array.from({ length: 5 }, () => null);
+  const dailyTasks = data.tasks
+    .filter((task) => task.dueDate === anchor && task.status !== "done")
+    .slice(0, 5);
+  const dailyTaskLines: Array<Task | null> = [
+    ...dailyTasks,
+    ...Array.from({ length: Math.max(0, 5 - dailyTasks.length) }, () => null),
+  ];
+  const weekLabel = `${formatDate(weekStart, {
+    day: "numeric",
+    month: "long",
+  })} — ${formatDate(addCalendarDays(weekStart, 6), {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  })}`;
+  const monthLabel = new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric",
+  }).format(monthStart);
+  const dayLabel = new Intl.DateTimeFormat("ru-RU", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(selectedDate);
+  const printedTitle =
+    template === "week"
+      ? `Неделя · ${weekLabel}`
+      : template === "month"
+        ? `Месяц · ${monthLabel}`
+        : `День · ${dayLabel}`;
+
+  function selectAnchor(value: string) {
+    if (!value) return;
+    if (template === "month") {
+      setAnchor(`${value}-01`);
+      return;
+    }
+    const next = dateFromKey(value);
+    setAnchor(dateKey(template === "week" ? startOfWeek(next) : next));
+  }
+
+  function printTemplate() {
+    const previousTitle = document.title;
+    const orientation = template === "day" ? "portrait" : "landscape";
+    document.getElementById("flowtrack-print-page")?.remove();
+
+    const pageStyle = document.createElement("style");
+    pageStyle.id = "flowtrack-print-page";
+    pageStyle.textContent = `@page { size: A4 ${orientation}; margin: 8mm; }`;
+    document.head.appendChild(pageStyle);
+
+    const restorePrintDocument = () => {
+      document.title = previousTitle;
+      pageStyle.remove();
+    };
+    document.title = `FlowTrack — ${printedTitle}`;
+    window.addEventListener("afterprint", restorePrintDocument, { once: true });
+
+    try {
+      window.print();
+    } catch (error) {
+      restorePrintDocument();
+      throw error;
+    }
+  }
+
+  function isCompleted(habitId: number, date: string) {
+    return data.habitLogs.some(
+      (log) => log.habitId === habitId && log.date === date && log.completed,
+    );
+  }
+
+  return (
+    <div className="page-stack print-page">
+      <PageHeader
+        eyebrow="Бумажный режим"
+        title="Печать"
+        subtitle="Формируй чистые листы для ручных отметок — они не меняют статистику, пока ты не внесёшь факты в приложение."
+        action={
+          <button
+            className="primary-button print-action"
+            type="button"
+            onClick={printTemplate}
+          >
+            <Printer size={17} />
+            Печать / PDF
+          </button>
+        }
+      />
+
+      <section className="print-template-selector" aria-label="Выбор шаблона">
+        {PRINT_TEMPLATE_OPTIONS.map(({ id, label, description, icon: Icon }) => (
+          <button
+            className={
+              template === id
+                ? "print-template-option print-template-option-active"
+                : "print-template-option"
+            }
+            type="button"
+            key={id}
+            onClick={() => setTemplate(id)}
+            aria-pressed={template === id}
+          >
+            <span className="print-template-icon" aria-hidden="true">
+              <Icon size={19} />
+            </span>
+            <span>
+              <strong>{label}</strong>
+              <small>{description}</small>
+            </span>
+          </button>
+        ))}
+      </section>
+
+      <section className="print-controls panel">
+        <label>
+          <span>
+            {template === "week"
+              ? "Неделя начинается"
+              : template === "month"
+                ? "Месяц"
+                : "Дата"}
+          </span>
+          <input
+            type={template === "month" ? "month" : "date"}
+            value={template === "month" ? anchor.slice(0, 7) : dateKey(
+              template === "week" ? weekStart : selectedDate,
+            )}
+            onChange={(event) => selectAnchor(event.target.value)}
+          />
+        </label>
+        <div className="print-control-copy">
+          <strong>{printedTitle}</strong>
+          <span>
+            На лист попадут названия привычек и пустые поля для ручных отметок.
+          </span>
+        </div>
+      </section>
+
+      <section
+        className={`print-sheet print-sheet-${template} print-export`}
+        aria-label={`Шаблон на печать: ${printedTitle}`}
+      >
+        <header className="print-sheet-header">
+          <div>
+            <span className="print-sheet-kicker">FlowTrack · шаблон на печать</span>
+            <h2>
+              {template === "week"
+                ? "Трекер привычек на неделю"
+                : template === "month"
+                  ? "Трекер привычек на месяц"
+                  : "Ежедневный лист фокуса"}
+            </h2>
+            <p>{printedTitle}</p>
+          </div>
+          <div className="print-sheet-owner">
+            <span>Цель периода</span>
+            <strong />
+          </div>
+        </header>
+
+        {template === "week" && (
+          <>
+            <table className="paper-habit-table" aria-label="Недельный трекер привычек">
+              <thead>
+                <tr>
+                  <th scope="col">Привычка</th>
+                  {weekDates.map((day) => (
+                    <th scope="col" key={dateKey(day)}>
+                      <span>
+                        {new Intl.DateTimeFormat("ru-RU", {
+                          weekday: "short",
+                        })
+                          .format(day)
+                          .replace(".", "")}
+                      </span>
+                      <small>{day.getDate()}</small>
+                    </th>
+                  ))}
+                  <th scope="col">Итог</th>
+                </tr>
+              </thead>
+              <tbody>
+                {printableHabits.map((habit, index) => (
+                  <tr key={habit?.id ?? `blank-${index}`}>
+                    <th scope="row">
+                      {habit ? (
+                        <span className="paper-habit-title">
+                          <i style={{ backgroundColor: habit.color }} />
+                          <span>
+                            {habitEmoji(habit)} {habit.title}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="paper-empty-label">Новая привычка</span>
+                      )}
+                    </th>
+                    {weekDates.map((day) => (
+                      <td key={dateKey(day)}>
+                        <span className="paper-check" aria-hidden="true" />
+                      </td>
+                    ))}
+                    <td className="paper-total-cell">
+                      <span className="paper-total-line" aria-hidden="true" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="paper-week-footer">
+              <section>
+                <h3>Что помогло держать ритм?</h3>
+                <div className="paper-writing-space" />
+              </section>
+              <section>
+                <h3>Что улучшить на следующей неделе?</h3>
+                <div className="paper-writing-space" />
+              </section>
+            </div>
+          </>
+        )}
+
+        {template === "month" && (
+          <>
+            <table className="paper-month-table" aria-label="Месячный трекер привычек">
+              <thead>
+                <tr>
+                  <th scope="col">Привычка</th>
+                  {monthDates.map((day) => (
+                    <th scope="col" key={dateKey(day)}>
+                      <span>{day.getDate()}</span>
+                      <small>
+                        {new Intl.DateTimeFormat("ru-RU", {
+                          weekday: "narrow",
+                        }).format(day)}
+                      </small>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {printableHabits.map((habit, index) => (
+                  <tr key={habit?.id ?? `blank-month-${index}`}>
+                    <th scope="row">
+                      {habit ? (
+                        <span className="paper-habit-title">
+                          <i style={{ backgroundColor: habit.color }} />
+                          <span>{habit.title}</span>
+                        </span>
+                      ) : (
+                        <span className="paper-empty-label">Новая привычка</span>
+                      )}
+                    </th>
+                    {monthDates.map((day) => (
+                      <td key={dateKey(day)}>
+                        <span className="paper-check" aria-hidden="true" />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="paper-month-summary">
+              <span>Главный результат месяца</span>
+              <strong />
+              <span>Фокус следующего месяца</span>
+              <strong />
+            </div>
+          </>
+        )}
+
+        {template === "day" && (
+          <div className="paper-day-layout">
+            <section className="paper-day-section paper-day-tasks">
+              <div className="paper-section-heading">
+                <span>01</span>
+                <h3>Главные задачи</h3>
+              </div>
+              <ol className="paper-task-list">
+                {dailyTaskLines.map((task, index) => (
+                  <li key={task?.id ?? `task-line-${index}`}>
+                    <span className="paper-check" aria-hidden="true" />
+                    <span>{task?.title ?? ""}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            <section className="paper-day-section paper-day-focus">
+              <div className="paper-section-heading">
+                <span>02</span>
+                <h3>Фокус / Pomodoro</h3>
+              </div>
+              <div className="paper-pomodoro-grid">
+                {Array.from({ length: 8 }, (_, index) => (
+                  <span key={index}>{index + 1}</span>
+                ))}
+              </div>
+              <p>Отмечай каждый завершённый фокус-блок.</p>
+            </section>
+
+            <section className="paper-day-section paper-day-habits">
+              <div className="paper-section-heading">
+                <span>03</span>
+                <h3>Привычки</h3>
+              </div>
+              <ul className="paper-day-habit-list">
+                {printableHabits.slice(0, 6).map((habit, index) => (
+                  <li key={habit?.id ?? `day-habit-${index}`}>
+                    <span className="paper-check" aria-hidden="true" />
+                    <span>{habit?.title ?? "Новая привычка"}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <section className="paper-day-section paper-day-notes">
+              <div className="paper-section-heading">
+                <span>04</span>
+                <h3>Заметки и вечерний итог</h3>
+              </div>
+              <div className="paper-notes-space" />
+            </section>
+          </div>
+        )}
+
+        <footer className="print-sheet-footer">
+          <span>Распечатанный лист — это план и ручные заметки.</span>
+          <span>Для статистики внеси фактические отметки в FlowTrack.</span>
+        </footer>
+      </section>
+
+      {template === "week" && (
+        <section className="paper-import-panel">
+          <div>
+            <span className="eyebrow">После бумаги</span>
+            <h2>Внести отметки с бумаги</h2>
+            <p>
+              Перенеси только реальные выполнения. Эти галочки сразу сохраняются в
+              привычках и учитываются в аналитике.
+            </p>
+          </div>
+          {data.habits.length ? (
+            <div className="paper-entry-table-wrap">
+              <table className="paper-entry-table" aria-label="Внесение недельных отметок">
+                <thead>
+                  <tr>
+                    <th scope="col">Привычка</th>
+                    {weekDates.map((day) => (
+                      <th scope="col" key={dateKey(day)}>
+                        <span>
+                          {new Intl.DateTimeFormat("ru-RU", {
+                            weekday: "short",
+                          })
+                            .format(day)
+                            .replace(".", "")}
+                        </span>
+                        <small>{day.getDate()}</small>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.habits.map((habit) => (
+                    <tr key={habit.id}>
+                      <th scope="row">
+                        <span className="paper-entry-habit">
+                          <i style={{ backgroundColor: habit.color }} />
+                          <span>
+                            <strong>{habit.title}</strong>
+                            <small>{habitFrequencyLabel(habit)}</small>
+                          </span>
+                        </span>
+                      </th>
+                      {weekDates.map((day) => {
+                        const key = dateKey(day);
+                        const completed = isCompleted(habit.id, key);
+                        const saving = savingHabitKeys.has(habitLogKey(habit.id, key));
+                        return (
+                          <td key={key}>
+                            <button
+                              className={
+                                completed
+                                  ? "paper-entry-toggle paper-entry-toggle-active"
+                                  : "paper-entry-toggle"
+                              }
+                              type="button"
+                              disabled={saving}
+                              aria-busy={saving}
+                              aria-pressed={completed}
+                              aria-label={`${habit.title}: ${formatDate(day, {
+                                weekday: "long",
+                                day: "numeric",
+                                month: "long",
+                              })} — ${completed ? "выполнено" : "не выполнено"}`}
+                              onClick={() =>
+                                void onToggleHabit(habit.id, key, !completed)
+                              }
+                            >
+                              {completed && <Check size={15} strokeWidth={3} />}
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon={<Target size={26} />}
+              title="Пока нет привычек"
+              text="Создай привычки в соответствующем разделе — они появятся и в печатных листах."
+            />
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function Schedule({
   data,
   onCreate,
@@ -4060,35 +4567,45 @@ function Projects({
 
     const previous = cards;
     const sourceId = activeCard.columnId;
-    const withoutActive = cards.filter((card) => card.id !== activeId);
-    const sourceCards = withoutActive
-      .filter((card) => card.columnId === sourceId)
-      .sort((left, right) => left.order - right.order);
-    const targetCards = withoutActive
-      .filter((card) => card.columnId === targetColumnId)
-      .sort((left, right) => left.order - right.order);
     const overCardId = parseKanbanId(overId, KANBAN_CARD_PREFIX);
-    const overIndex = overCardId
-      ? targetCards.findIndex((card) => card.id === overCardId)
-      : -1;
-    const insertAt = overIndex >= 0 ? overIndex : targetCards.length;
-    const moved = { ...activeCard, columnId: targetColumnId };
+    const replacements = new Map<number, Card>();
 
     if (sourceId === targetColumnId) {
-      targetCards.splice(insertAt, 0, moved);
-    } else {
-      targetCards.splice(insertAt, 0, moved);
-    }
+      const currentColumnCards = cards
+        .filter((card) => card.columnId === sourceId)
+        .sort((left, right) => left.order - right.order);
+      const reorderedCards = reorderCardsWithinColumn(
+        currentColumnCards,
+        activeId,
+        overCardId,
+      );
+      if (reorderedCards === currentColumnCards) return;
 
-    const replacements = new Map<number, Card>();
-    if (sourceId !== targetColumnId) {
+      reorderedCards.forEach((card) => replacements.set(card.id, card));
+    } else {
+      const withoutActive = cards.filter((card) => card.id !== activeId);
+      const sourceCards = withoutActive
+        .filter((card) => card.columnId === sourceId)
+        .sort((left, right) => left.order - right.order);
+      const targetCards = withoutActive
+        .filter((card) => card.columnId === targetColumnId)
+        .sort((left, right) => left.order - right.order);
+      const overIndex = overCardId
+        ? targetCards.findIndex((card) => card.id === overCardId)
+        : -1;
+      const insertAt = overIndex >= 0 ? overIndex : targetCards.length;
+      targetCards.splice(insertAt, 0, {
+        ...activeCard,
+        columnId: targetColumnId,
+      });
+
       sourceCards.forEach((card, order) =>
         replacements.set(card.id, { ...card, order }),
       );
+      targetCards.forEach((card, order) =>
+        replacements.set(card.id, { ...card, order }),
+      );
     }
-    targetCards.forEach((card, order) =>
-      replacements.set(card.id, { ...card, order }),
-    );
 
     const next = cards.map((card) => replacements.get(card.id) ?? card);
     const changed = next.some((card, index) => {
@@ -4230,7 +4747,6 @@ function Projects({
                 {canUsePortal
                   ? createPortal(
                       <DragOverlay
-                        modifiers={[alignDragOverlayWithCursor]}
                         dropAnimation={null}
                       >
                         {activeCard ? (

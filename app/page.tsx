@@ -67,8 +67,8 @@ function AuthLanding({ signInHref }: { signInHref: string }) {
           <div>
             <Users size={18} />
             <span>
-              <strong>Для всей семьи</strong>
-              У каждого свой отдельный кабинет
+              <strong>Для семьи и команды</strong>
+              Общие проекты в Team Workspace
             </span>
           </div>
           <div>
