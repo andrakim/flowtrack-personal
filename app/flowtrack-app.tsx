@@ -3061,6 +3061,25 @@ function AnalyticsView({ data }: { data: AppData }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const sourceRevision = useMemo(
+    () =>
+      JSON.stringify({
+        habits: data.habits,
+        habitLogs: data.habitLogs,
+        tasks: data.tasks,
+        projects: data.projects,
+        timeEntries: data.timeEntries,
+        trash: data.trash,
+      }),
+    [
+      data.habitLogs,
+      data.habits,
+      data.projects,
+      data.tasks,
+      data.timeEntries,
+      data.trash,
+    ],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -3100,7 +3119,7 @@ function AnalyticsView({ data }: { data: AppData }) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [anchor, period, projectId, retryToken, today]);
+  }, [anchor, period, projectId, retryToken, sourceRevision, today]);
 
   const canMoveForward = Boolean(
     snapshot && snapshot.range.end < today,
@@ -3118,10 +3137,22 @@ function AnalyticsView({ data }: { data: AppData }) {
         title="Аналитика"
         subtitle="Не абстрактный балл продуктивности, а план, сроки, фокус и регулярность."
         action={
-          <span className="analytics-live-badge">
-            <i />
-            Данные обновляются автоматически
-          </span>
+          <div className="analytics-header-actions">
+            <span className="analytics-live-badge">
+              <i />
+              Данные обновляются автоматически
+            </span>
+            <button
+              className="secondary-button analytics-refresh-button"
+              type="button"
+              onClick={refreshAnalytics}
+              disabled={loading}
+              aria-label="Обновить данные аналитики"
+            >
+              <RotateCcw size={16} aria-hidden="true" />
+              {loading ? "Обновляю…" : "Обновить данные"}
+            </button>
+          </div>
         }
       />
 
