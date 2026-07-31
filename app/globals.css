@@ -2646,6 +2646,13 @@ button:disabled {
   padding-bottom: 40px;
 }
 
+.analytics-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .analytics-live-badge {
   display: inline-flex;
   align-items: center;
@@ -2667,6 +2674,20 @@ button:disabled {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 5px rgba(var(--accent-rgb), 0.12);
+}
+
+.analytics-refresh-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.analytics-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.analytics-refresh-button:disabled svg {
+  animation: spin 800ms linear infinite;
 }
 
 .analytics-toolbar {
@@ -3358,6 +3379,11 @@ button:disabled {
 
   .analytics-live-badge {
     display: none;
+  }
+
+  .analytics-header-actions,
+  .analytics-refresh-button {
+    width: 100%;
   }
 
   .analytics-toolbar {
