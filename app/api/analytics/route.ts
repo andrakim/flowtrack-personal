@@ -25,6 +25,9 @@ const PERIODS = new Set<AnalyticsPeriod>([
   "year",
 ]);
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+const NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+};
 
 function errorMessage(error: unknown) {
   const value = error instanceof Error ? error.message : "Неизвестная ошибка";
@@ -123,11 +126,15 @@ export async function GET(request: Request) {
         projects: projectRows,
         events: eventRows,
       }),
+      { headers: NO_STORE_HEADERS },
     );
   } catch (error) {
     return Response.json(
       { error: errorMessage(error) },
-      { status: isAuthenticationRequiredError(error) ? 401 : 500 },
+      {
+        status: isAuthenticationRequiredError(error) ? 401 : 500,
+        headers: NO_STORE_HEADERS,
+      },
     );
   }
 }
