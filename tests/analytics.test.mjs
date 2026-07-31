@@ -206,7 +206,22 @@ test("calculates plan, deadlines, focus, habits and comparisons without a synthe
       },
     ],
     habitLogs: [],
-    timeEntries: [],
+    timeEntries: [
+      {
+        id: 30,
+        projectId: 10,
+        startTime: at("2026-07-28"),
+        endTime: at("2026-07-28"),
+        duration: 1500,
+      },
+      {
+        id: 31,
+        projectId: 10,
+        startTime: at("2026-07-22"),
+        endTime: at("2026-07-22"),
+        duration: 600,
+      },
+    ],
     projects: [
       {
         id: 10,
@@ -232,6 +247,163 @@ test("calculates plan, deadlines, focus, habits and comparisons without a synthe
   assert.ok(!("productivityScore" in snapshot.metrics));
 });
 
+test("excludes deleted and permanently removed source records from live analytics", () => {
+  const snapshot = buildAnalyticsSnapshot({
+    period: "week",
+    anchor: "2026-07-30",
+    today: "2026-07-30",
+    timezoneOffset: 0,
+    projectId: null,
+    trackingStartedAt: at("2026-07-20"),
+    tasks: [
+      {
+        id: 1,
+        status: "done",
+        dueDate: "2026-07-29",
+        projectId: 10,
+        createdAt: at("2026-07-20"),
+        completedAt: at("2026-07-29"),
+        deletedAt: null,
+      },
+      {
+        id: 2,
+        status: "done",
+        dueDate: "2026-07-29",
+        projectId: 10,
+        createdAt: at("2026-07-20"),
+        completedAt: at("2026-07-29"),
+        deletedAt: at("2026-07-30"),
+      },
+    ],
+    habits: [
+      {
+        id: 20,
+        frequency: "daily",
+        targetPerDay: 1,
+        createdAt: at("2026-07-27"),
+        deletedAt: null,
+      },
+      {
+        id: 21,
+        frequency: "daily",
+        targetPerDay: 1,
+        createdAt: at("2026-07-27"),
+        deletedAt: at("2026-07-30"),
+      },
+    ],
+    habitLogs: [],
+    timeEntries: [
+      {
+        id: 30,
+        projectId: 10,
+        startTime: at("2026-07-29"),
+        endTime: at("2026-07-29"),
+        duration: 600,
+      },
+    ],
+    projects: [
+      {
+        id: 10,
+        title: "FlowTrack",
+        color: "#7c3aed",
+        status: "active",
+        deletedAt: null,
+      },
+    ],
+    events: [
+      event({
+        id: 1,
+        entityType: "task",
+        entityId: 1,
+        eventType: "task_created",
+        date: "2026-07-20",
+        projectId: 10,
+        nextValue: "2026-07-29",
+      }),
+      event({
+        id: 2,
+        entityType: "task",
+        entityId: 1,
+        eventType: "task_completed",
+        date: "2026-07-29",
+        projectId: 10,
+      }),
+      event({
+        id: 3,
+        entityType: "task",
+        entityId: 2,
+        eventType: "task_completed",
+        date: "2026-07-29",
+        projectId: 10,
+      }),
+      event({
+        id: 4,
+        entityType: "task",
+        entityId: 999,
+        eventType: "task_completed",
+        date: "2026-07-29",
+        projectId: 10,
+      }),
+      event({
+        id: 5,
+        entityType: "habit",
+        entityId: 20,
+        eventType: "habit_created",
+        date: "2026-07-27",
+        nextValue: "daily:1",
+      }),
+      event({
+        id: 6,
+        entityType: "habit",
+        entityId: 20,
+        eventType: "habit_completed",
+        date: "2026-07-29",
+        effectiveDate: "2026-07-29",
+      }),
+      event({
+        id: 7,
+        entityType: "habit",
+        entityId: 21,
+        eventType: "habit_completed",
+        date: "2026-07-29",
+        effectiveDate: "2026-07-29",
+      }),
+      event({
+        id: 8,
+        entityType: "habit",
+        entityId: 999,
+        eventType: "habit_completed",
+        date: "2026-07-29",
+        effectiveDate: "2026-07-29",
+      }),
+      event({
+        id: 9,
+        entityType: "focus",
+        entityId: 30,
+        eventType: "focus_completed",
+        date: "2026-07-29",
+        projectId: 10,
+        durationSeconds: 600,
+      }),
+      event({
+        id: 10,
+        entityType: "focus",
+        entityId: 999,
+        eventType: "focus_completed",
+        date: "2026-07-29",
+        projectId: 10,
+        durationSeconds: 3600,
+      }),
+    ],
+  });
+
+  assert.equal(snapshot.metrics.completedTasks, 1);
+  assert.equal(snapshot.metrics.planCompletion.denominator, 1);
+  assert.equal(snapshot.metrics.focus.value, 600);
+  assert.equal(snapshot.metrics.habits.numerator, 1);
+  assert.equal(snapshot.metrics.habits.denominator, 4);
+});
+
 test("analytics data is user-scoped and backed by an event history migration", async () => {
   const [route, schema, migration] = await Promise.all([
     readFile(routeUrl, "utf8"),
@@ -247,6 +419,19 @@ test("analytics data is user-scoped and backed by an event history migration", a
   assert.match(migration, /CREATE TRIGGER `analytics_tasks_due_after_update`/);
   assert.match(migration, /CREATE TRIGGER `analytics_habit_logs_after_update`/);
   assert.match(migration, /CREATE TRIGGER `analytics_time_entries_after_update`/);
+});
+
+test("analytics can be refreshed manually, reacts to source changes and bypasses caches", async () => {
+  const [app, route] = await Promise.all([
+    readFile(appUrl, "utf8"),
+    readFile(routeUrl, "utf8"),
+  ]);
+
+  assert.match(app, /Обновить данные/);
+  assert.match(app, /sourceRevision/);
+  assert.match(app, /retryToken,\s*sourceRevision/);
+  assert.match(route, /Cache-Control/);
+  assert.match(route, /no-store/);
 });
 
 test("analytics is reachable on desktop and mobile and has responsive theme-safe visuals", async () => {
