@@ -6,6 +6,11 @@ on:
     paths:
       - 'sanctuary-port/**'
       - '.github/workflows/sanctuary-port.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sanctuary-port/**'
+      - '.github/workflows/sanctuary-port.yml'
   workflow_dispatch:
 
 jobs:
